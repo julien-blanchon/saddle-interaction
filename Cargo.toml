@@ -1,0 +1,18 @@
+[package]
+name = "saddle-interaction"
+version = "0.1.0"
+edition = "2024"
+publish = false
+repository = "https://github.com/julien-blanchon/saddle-interaction"
+license = "MIT-0"
+description = "Reusable world-interaction framework for Bevy"
+
+[dependencies]
+bevy = "0.18"
+
+[workspace]
+
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+nonstandard_macro_braces = "warn"

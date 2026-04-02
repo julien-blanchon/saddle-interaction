@@ -1,0 +1,21 @@
+[package]
+name = "saddle-interaction-lab"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = ["dev"]
+dev = ["dep:bevy_brp_extras"]
+e2e = ["dep:saddle-bevy-e2e"]
+
+[dependencies]
+bevy = { version = "0.18", features = ["bevy_remote", "serialize"] }
+saddle-interaction = { workspace = true }
+saddle-interaction-example-common = { path = "../common" }
+bevy_enhanced_input = { workspace = true }
+bevy_brp_extras = { version = "0.19", optional = true }
+saddle-bevy-e2e = { git = "https://github.com/julien-blanchon/saddle-bevy-e2e", features = ["json"], optional = true }
+
+[lints]
+workspace = true

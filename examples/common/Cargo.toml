@@ -1,0 +1,13 @@
+[package]
+name = "saddle-interaction-example-common"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+bevy = { workspace = true }
+bevy_enhanced_input = { workspace = true }
+saddle-interaction = { workspace = true }
+
+[lints]
+workspace = true
