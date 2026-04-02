@@ -4,10 +4,10 @@ mod e2e;
 mod scenarios;
 
 use bevy::prelude::*;
-#[cfg(feature = "dev")]
+#[cfg(all(feature = "dev", not(target_arch = "wasm32")))]
 use bevy_brp_extras::BrpExtrasPlugin;
 use bevy_enhanced_input::prelude::{Cancel as InputCancel, *};
-use saddle_saddle_interaction::{
+use saddle_interaction::{
     ActiveInteraction, FocusedInteraction, Interactable, InteractionAvailabilityConfig,
     InteractionAvailabilityReason, InteractionCanceled, InteractionCompleted, InteractionConfig,
     InteractionDebugSettings, InteractionFailed, InteractionFocusedBy, InteractionIntent,
@@ -16,6 +16,7 @@ use saddle_saddle_interaction::{
     Interactor, InteractorAim,
 };
 
+#[cfg(all(feature = "dev", not(target_arch = "wasm32")))]
 const DEFAULT_BRPP_PORT: u16 = 15_732;
 const INTERACTOR_SIZE: Vec2 = Vec2::new(44.0, 44.0);
 const TARGET_SIZE: Vec2 = Vec2::new(92.0, 92.0);
@@ -150,7 +151,7 @@ fn main() {
     }));
     app.add_plugins(EnhancedInputPlugin);
     app.add_input_context::<LabInputContext>();
-    #[cfg(feature = "dev")]
+    #[cfg(all(feature = "dev", not(target_arch = "wasm32")))]
     app.add_plugins(BrpExtrasPlugin::with_port(lab_brp_port()));
     #[cfg(feature = "e2e")]
     app.add_plugins(e2e::InteractionLabE2EPlugin);
@@ -195,7 +196,7 @@ fn lab_config() -> InteractionConfig {
     }
 }
 
-#[cfg(feature = "dev")]
+#[cfg(all(feature = "dev", not(target_arch = "wasm32")))]
 fn lab_brp_port() -> u16 {
     std::env::var("BRP_EXTRAS_PORT")
         .ok()

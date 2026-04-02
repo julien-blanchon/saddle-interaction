@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Cancel as InputCancel, *};
-use saddle_saddle_interaction::{
+use saddle_interaction::{
     ActiveInteraction, Interactable, InteractionBehavior, InteractionCompleted, InteractionConfig,
     InteractionFailed, InteractionFocusedBy, InteractionIntent, InteractionIntentKind,
     InteractionOffered, InteractionPlugin, InteractionProgress, InteractionSlot, InteractionStage,
@@ -398,7 +398,9 @@ fn tint_targets(
     mut targets: Query<(&mut Sprite, Option<&InteractionFocusedBy>), With<DemoTargetVisual>>,
 ) {
     for (mut sprite, focused_by) in &mut targets {
-        sprite.color = if focused_by.is_some_and(|focus| !focus.interactors.is_empty()) {
+        sprite.color = if focused_by
+            .is_some_and(|focus: &InteractionFocusedBy| !focus.interactors.is_empty())
+        {
             Color::srgb(0.92, 0.72, 0.24)
         } else {
             Color::srgb(0.30, 0.34, 0.42)
