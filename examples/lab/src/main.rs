@@ -839,10 +839,14 @@ fn format_cancel_reason(reason: &saddle_interaction::InteractionCancelReason) ->
         saddle_interaction::InteractionCancelReason::InputReleased => "input_released".to_owned(),
         saddle_interaction::InteractionCancelReason::FocusLost => "focus_lost".to_owned(),
         saddle_interaction::InteractionCancelReason::DistanceBreak => "distance_break".to_owned(),
-        saddle_interaction::InteractionCancelReason::LineOfSightBreak => "line_of_sight_break".to_owned(),
+        saddle_interaction::InteractionCancelReason::LineOfSightBreak => {
+            "line_of_sight_break".to_owned()
+        }
         saddle_interaction::InteractionCancelReason::Busy => "busy".to_owned(),
         saddle_interaction::InteractionCancelReason::TargetMissing => "target_missing".to_owned(),
-        saddle_interaction::InteractionCancelReason::ReservationLost => "reservation_lost".to_owned(),
+        saddle_interaction::InteractionCancelReason::ReservationLost => {
+            "reservation_lost".to_owned()
+        }
         saddle_interaction::InteractionCancelReason::PredicateInvalidated { predicate, .. } => {
             format!("predicate_invalidated:{}", predicate.0)
         }

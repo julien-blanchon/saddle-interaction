@@ -9,7 +9,10 @@ pub struct InteractionLabE2EPlugin;
 impl Plugin for InteractionLabE2EPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(saddle_bevy_e2e::E2EPlugin);
-        app.configure_sets(Update, saddle_bevy_e2e::E2ESet.before(InteractionSystems::Detect));
+        app.configure_sets(
+            Update,
+            saddle_bevy_e2e::E2ESet.before(InteractionSystems::Detect),
+        );
 
         let args: Vec<String> = std::env::args().collect();
         let (scenario_name, handoff) = parse_e2e_args(&args);
