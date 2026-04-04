@@ -2,10 +2,12 @@ use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Cancel as InputCancel, *};
 use saddle_interaction::{
     ActiveInteraction, Interactable, InteractionBehavior, InteractionCompleted, InteractionConfig,
-    InteractionFailed, InteractionFocusedBy, InteractionIntent, InteractionIntentKind,
-    InteractionOffered, InteractionPlugin, InteractionProgress, InteractionSlot, InteractionStage,
+    InteractionExecution, InteractionFailed, InteractionFocusedBy, InteractionIntent,
+    InteractionIntentKind, InteractionOffered, InteractionPlugin, InteractionProgress,
+    InteractionPromptState, InteractionReservationPolicy, InteractionSlot, InteractionStage,
     InteractionStageAdvanced, InteractionTag, InteractionTags, InteractionTarget, Interactor,
 };
+use saddle_pane::prelude::*;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,6 +19,7 @@ pub enum DemoMode {
     Gated,
     Accessibility,
     PromptUi,
+    VehicleBay,
 }
 
 impl DemoMode {
@@ -29,6 +32,7 @@ impl DemoMode {
             DemoMode::Gated => "interaction/gated",
             DemoMode::Accessibility => "interaction/accessibility",
             DemoMode::PromptUi => "interaction/prompt_ui",
+            DemoMode::VehicleBay => "interaction/vehicle_bay",
         }
     }
 
@@ -44,6 +48,9 @@ impl DemoMode {
             DemoMode::Accessibility => "Hold interactions are converted into toggles by config.",
             DemoMode::PromptUi => {
                 "The HUD is driven only from InteractionPromptState and lifecycle messages."
+            }
+            DemoMode::VehicleBay => {
+                "Enter the rover, occupy the exclusive seat, then use the exit hatch to step back out."
             }
         }
     }
@@ -64,13 +71,19 @@ impl DemoMode {
 struct DemoInteractorContext;
 
 #[derive(Component)]
-struct DemoInteractor;
+pub struct DemoInteractor;
 
 #[derive(Component)]
 struct DemoTargetVisual;
 
 #[derive(Component)]
 struct DemoOverlay;
+
+#[derive(Component, Clone)]
+pub struct DemoBaseTargetSlots(pub Vec<InteractionSlot>);
+
+#[derive(Resource, Default)]
+struct InteractionDemoPaneInstalled;
 
 #[derive(Resource, Default)]
 struct DemoLog {
@@ -85,6 +98,31 @@ struct DemoLog {
 
 #[derive(Resource, Clone, Copy)]
 struct DemoModeResource(DemoMode);
+
+#[derive(Resource, Clone, Default, Pane)]
+#[pane(title = "Interaction Tuning")]
+struct InteractionDemoPane {
+    #[pane(slider, min = 2.0, max = 12.0, step = 0.1)]
+    actor_range: f32,
+    #[pane(slider, min = 0.5, max = 2.5, step = 0.05)]
+    detection_radius_scale: f32,
+    #[pane(slider, min = 0.25, max = 2.5, step = 0.05)]
+    hold_time_scale: f32,
+    hold_to_toggle: bool,
+    auto_interact_on_focus: bool,
+}
+
+impl InteractionDemoPane {
+    fn for_mode(mode: DemoMode) -> Self {
+        Self {
+            actor_range: 6.0,
+            detection_radius_scale: 1.0,
+            hold_time_scale: 1.0,
+            hold_to_toggle: mode == DemoMode::Accessibility,
+            auto_interact_on_focus: false,
+        }
+    }
+}
 
 #[derive(InputAction)]
 #[action_output(bool)]
@@ -115,6 +153,7 @@ pub fn run(mode: DemoMode) {
         }),
         ..default()
     }));
+    install_demo_pane(&mut app, mode == DemoMode::Accessibility);
     app.add_plugins(EnhancedInputPlugin);
     app.add_input_context::<DemoInteractorContext>();
     app.add_plugins(InteractionPlugin::default().with_config(mode.config()));
@@ -144,6 +183,28 @@ pub fn run(mode: DemoMode) {
 
 fn setup_scene(mut commands: Commands, mode: Res<DemoModeResource>) {
     commands.spawn((Name::new("Demo Camera"), Camera2d));
+    commands.spawn((
+        Name::new("Backdrop"),
+        Sprite::from_color(Color::srgb(0.07, 0.08, 0.11), Vec2::new(2200.0, 1600.0)),
+        Transform::from_xyz(0.0, 0.0, -20.0),
+    ));
+    commands.spawn((
+        Name::new("Upper Band"),
+        Sprite::from_color(Color::srgb(0.08, 0.1, 0.14), Vec2::new(2200.0, 260.0)),
+        Transform::from_xyz(0.0, 240.0, -18.0),
+    ));
+    commands.spawn((
+        Name::new("Lower Pad"),
+        Sprite::from_color(Color::srgb(0.1, 0.11, 0.14), Vec2::new(2200.0, 220.0)),
+        Transform::from_xyz(0.0, -250.0, -18.0),
+    ));
+    for (index, x) in (-5..=5).enumerate() {
+        commands.spawn((
+            Name::new(format!("Guide Column {}", index + 1)),
+            Sprite::from_color(Color::srgba(0.85, 0.92, 1.0, 0.035), Vec2::new(2.0, 1600.0)),
+            Transform::from_xyz(x as f32 * 110.0, 0.0, -15.0),
+        ));
+    }
     commands.spawn((
         Name::new("Demo Overlay"),
         DemoOverlay,
@@ -314,6 +375,44 @@ fn setup_scene(mut commands: Commands, mode: Res<DemoModeResource>) {
                 }],
             );
         }
+        DemoMode::VehicleBay => {
+            commands.spawn((
+                Name::new("Rover Body"),
+                Sprite::from_color(Color::srgb(0.21, 0.24, 0.3), Vec2::new(240.0, 180.0)),
+                Transform::from_xyz(120.0, 0.0, 0.5),
+            ));
+            commands.spawn((
+                Name::new("Rover Canopy"),
+                Sprite::from_color(Color::srgba(0.3, 0.72, 0.92, 0.18), Vec2::new(160.0, 58.0)),
+                Transform::from_xyz(120.0, 62.0, 0.6),
+            ));
+            spawn_target(
+                &mut commands,
+                "Cockpit",
+                Vec3::new(120.0, 70.0, 1.0),
+                vec![InteractionSlot {
+                    availability: saddle_interaction::InteractionAvailabilityConfig {
+                        blocked_actor_tags: vec![InteractionTag::from("seated")],
+                        ..default()
+                    },
+                    reservation: InteractionReservationPolicy::Exclusive,
+                    ..InteractionSlot::instant("enter_vehicle", "Enter Rover")
+                }],
+            );
+            spawn_target(
+                &mut commands,
+                "Exit Hatch",
+                Vec3::new(120.0, -70.0, 1.0),
+                vec![InteractionSlot {
+                    availability: saddle_interaction::InteractionAvailabilityConfig {
+                        required_actor_tags: vec![InteractionTag::from("seated")],
+                        ..default()
+                    },
+                    reservation: InteractionReservationPolicy::Exclusive,
+                    ..InteractionSlot::instant("exit_vehicle", "Exit Rover")
+                }],
+            );
+        }
     }
 }
 
@@ -327,6 +426,7 @@ fn spawn_target(
         .spawn((
             Name::new(name.to_owned()),
             DemoTargetVisual,
+            DemoBaseTargetSlots(slots.clone()),
             Interactable::default(),
             InteractionTarget { slots },
             Sprite {
@@ -338,6 +438,91 @@ fn spawn_target(
             GlobalTransform::from_translation(position),
         ))
         .id()
+}
+
+pub fn pane_plugins() -> (
+    bevy_flair::FlairPlugin,
+    bevy_input_focus::InputDispatchPlugin,
+    bevy_ui_widgets::UiWidgetsPlugins,
+    bevy_input_focus::tab_navigation::TabNavigationPlugin,
+    saddle_pane::PanePlugin,
+) {
+    (
+        bevy_flair::FlairPlugin,
+        bevy_input_focus::InputDispatchPlugin,
+        bevy_ui_widgets::UiWidgetsPlugins,
+        bevy_input_focus::tab_navigation::TabNavigationPlugin,
+        saddle_pane::PanePlugin,
+    )
+}
+
+pub fn install_demo_pane(app: &mut App, hold_to_toggle: bool) {
+    if app.world().contains_resource::<InteractionDemoPaneInstalled>() {
+        return;
+    }
+
+    app.insert_resource(InteractionDemoPaneInstalled);
+    if !app.world().contains_resource::<InteractionDemoPane>() {
+        let mut pane = InteractionDemoPane::for_mode(DemoMode::Basic);
+        pane.hold_to_toggle = hold_to_toggle;
+        app.insert_resource(pane);
+    }
+    if !app.is_plugin_added::<saddle_pane::PanePlugin>() {
+        app.add_plugins(pane_plugins());
+    }
+    app.register_pane::<InteractionDemoPane>();
+    app.add_systems(Update, sync_interaction_pane);
+}
+
+fn sync_interaction_pane(
+    pane: Res<InteractionDemoPane>,
+    mut config: ResMut<InteractionConfig>,
+    mut interactors: Query<&mut Interactor, With<DemoInteractor>>,
+    mut targets: Query<(&mut Interactable, &mut InteractionTarget, &DemoBaseTargetSlots)>,
+) {
+    if !pane.is_changed() {
+        return;
+    }
+
+    config.hold_to_toggle = pane.hold_to_toggle;
+    config.auto_interact_on_focus = pane.auto_interact_on_focus;
+    config.detection_radius_scale = pane.detection_radius_scale;
+    config.hold_time_scale = pane.hold_time_scale;
+
+    for mut interactor in &mut interactors {
+        interactor.max_distance = Some(pane.actor_range);
+        interactor.proximity_radius = Some(pane.actor_range);
+    }
+
+    for (mut interactable, mut target, base_slots) in &mut targets {
+        interactable.focus_radius = Some(pane.actor_range);
+        target.slots = base_slots.0.clone();
+        for slot in &mut target.slots {
+            slot.auto_trigger_on_focus = pane.auto_interact_on_focus;
+            scale_hold_durations(&mut slot.behavior, pane.hold_time_scale);
+        }
+    }
+}
+
+fn scale_hold_durations(behavior: &mut InteractionBehavior, scale: f32) {
+    match behavior {
+        InteractionBehavior::Single(InteractionExecution::Hold { duration_seconds })
+        | InteractionBehavior::Single(InteractionExecution::Passive { duration_seconds }) => {
+            *duration_seconds *= scale;
+        }
+        InteractionBehavior::Single(_) => {}
+        InteractionBehavior::Sequence { stages, .. } => {
+            for stage in stages {
+                match &mut stage.execution {
+                    InteractionExecution::Hold { duration_seconds }
+                    | InteractionExecution::Passive { duration_seconds } => {
+                        *duration_seconds *= scale;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 fn on_interact_start(
@@ -472,7 +657,7 @@ fn gate_example_unlocks(
     mut reader: MessageReader<InteractionCompleted>,
     interactors: Query<&InteractionTags, With<DemoInteractor>>,
 ) {
-    if mode.0 != DemoMode::Gated {
+    if !matches!(mode.0, DemoMode::Gated | DemoMode::VehicleBay) {
         return;
     }
 
@@ -487,14 +672,43 @@ fn gate_example_unlocks(
             }
             commands.entity(event.interactor).insert(tags);
         }
+
+        if mode.0 == DemoMode::VehicleBay {
+            let mut tags = interactors
+                .get(event.interactor)
+                .cloned()
+                .unwrap_or_default();
+            let seated = InteractionTag::from("seated");
+            match event.slot_id.0.as_str() {
+                "enter_vehicle" => {
+                    if !tags.contains(&seated) {
+                        tags.tags.push(seated);
+                    }
+                    commands
+                        .entity(event.interactor)
+                        .insert(Transform::from_xyz(120.0, 70.0, 2.0))
+                        .insert(tags);
+                }
+                "exit_vehicle" => {
+                    tags.tags.retain(|tag| tag != &seated);
+                    commands
+                        .entity(event.interactor)
+                        .insert(Transform::from_xyz(-260.0, 0.0, 2.0))
+                        .insert(tags);
+                }
+                _ => {}
+            }
+        }
     }
 }
 
 fn update_overlay(
     mode: Res<DemoModeResource>,
     log: Res<DemoLog>,
-    focused: Query<&saddle_interaction::InteractionPromptState, With<DemoInteractor>>,
+    pane: Res<InteractionDemoPane>,
+    focused: Query<&InteractionPromptState, With<DemoInteractor>>,
     active: Query<&ActiveInteraction, With<DemoInteractor>>,
+    interactor_tags: Query<&InteractionTags, With<DemoInteractor>>,
     mut overlay: Single<&mut Text, With<DemoOverlay>>,
 ) {
     let prompt = focused
@@ -508,19 +722,40 @@ fn update_overlay(
         .next()
         .map(|active| format!("{} {:.0}%", active.slot_id.0, active.progress * 100.0))
         .unwrap_or_else(|| "none".to_owned());
+    let tags = interactor_tags
+        .iter()
+        .next()
+        .map(|tags| {
+            if tags.tags.is_empty() {
+                "none".to_owned()
+            } else {
+                tags.tags
+                    .iter()
+                    .map(|tag| tag.0.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        })
+        .unwrap_or_else(|| "none".to_owned());
 
     **overlay = Text::new(format!(
-        "{}\n{}\n\nfocused prompt: {}\nrecorded prompt: {}\nactive: {}\nprogress: {:.0}%\nlast result: {}\ncompleted: {} failed: {} canceled: {} stage advances: {}\n\nControls:\n  E: interact\n  Tab: next slot\n  Q: previous slot\n  Esc: cancel",
+        "{}\n{}\n\nfocused prompt: {}\nrecorded prompt: {}\nactive: {}\nprogress: {:.0}%\nactor tags: {}\ncompleted: {} failed: {} canceled: {} stage advances: {}\nlast result: {}\n\nPane:\n  range {:.1} | radius x{:.2} | hold x{:.2} | toggle {} | auto {}\n\nControls:\n  E: interact\n  Tab: next slot\n  Q: previous slot\n  Esc: cancel",
         mode.0.title(),
         mode.0.subtitle(),
         prompt,
         log.last_prompt,
         active,
         log.progress * 100.0,
-        log.last_result,
+        tags,
         log.completed,
         log.failed,
         log.canceled,
         log.stage_advanced,
+        log.last_result,
+        pane.actor_range,
+        pane.detection_radius_scale,
+        pane.hold_time_scale,
+        pane.hold_to_toggle,
+        pane.auto_interact_on_focus,
     ));
 }

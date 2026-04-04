@@ -7,7 +7,8 @@ use crate::{
     InteractionPlugin,
     components::{
         ActiveInteraction, FocusedInteraction, Interactable, InteractionAvailabilityReason,
-        InteractionConsumption, InteractionSlot, InteractionTarget, Interactor,
+        InteractionConsumption, InteractionReservationPolicy, InteractionSlot, InteractionTarget,
+        Interactor,
     },
     messages::InteractionIntent,
 };
@@ -319,5 +320,110 @@ fn one_shot_consumption_blocks_repeat_attempts() {
     assert_eq!(
         log.last_failed,
         Some(InteractionAvailabilityReason::Consumed)
+    );
+}
+
+#[test]
+fn exclusive_reservation_blocks_second_interactor_while_first_is_active() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+        100,
+    )));
+    app.add_plugins(InteractionPlugin::default());
+    app.init_resource::<TestLog>();
+    app.add_systems(
+        PostUpdate,
+        (
+            |mut log: ResMut<TestLog>,
+             mut reader: MessageReader<crate::messages::InteractionCompleted>| {
+                log.completed += reader.read().count();
+            },
+            |mut log: ResMut<TestLog>,
+             mut reader: MessageReader<crate::messages::InteractionCanceled>| {
+                for event in reader.read() {
+                    log.canceled += 1;
+                    log.last_canceled = Some(event.reason.clone());
+                }
+            },
+            |mut log: ResMut<TestLog>,
+             mut reader: MessageReader<crate::messages::InteractionFailed>| {
+                for event in reader.read() {
+                    log.failed += 1;
+                    log.last_failed = Some(event.reason.clone());
+                }
+            },
+        ),
+    );
+
+    let first_interactor = app
+        .world_mut()
+        .spawn((
+            Name::new("Driver A"),
+            Interactor {
+                max_distance: Some(5.0),
+                proximity_radius: Some(5.0),
+                ..default()
+            },
+            GlobalTransform::from_xyz(0.0, 0.0, 0.0),
+        ))
+        .id();
+    let second_interactor = app
+        .world_mut()
+        .spawn((
+            Name::new("Driver B"),
+            Interactor {
+                max_distance: Some(5.0),
+                proximity_radius: Some(5.0),
+                ..default()
+            },
+            GlobalTransform::from_xyz(0.0, 1.0, 0.0),
+        ))
+        .id();
+    app.world_mut().spawn((
+        Name::new("Jeep Seat"),
+        Interactable::default(),
+        InteractionTarget {
+            slots: vec![InteractionSlot {
+                behavior: crate::components::InteractionBehavior::Single(
+                    InteractionExecution::Hold {
+                        duration_seconds: 1.0,
+                    },
+                ),
+                reservation: InteractionReservationPolicy::Exclusive,
+                ..InteractionSlot::instant("enter_vehicle", "Enter Vehicle")
+            }],
+        },
+        GlobalTransform::from_xyz(1.0, 0.0, 0.0),
+    ));
+
+    app.world_mut().write_message(InteractionIntent {
+        interactor: first_interactor,
+        kind: crate::messages::InteractionIntentKind::Press,
+    });
+    app.update();
+
+    let first_active = app
+        .world()
+        .get::<ActiveInteraction>(first_interactor)
+        .expect("first interactor should keep the exclusive slot active");
+    assert_eq!(first_active.slot_id.0, "enter_vehicle");
+
+    app.world_mut().write_message(InteractionIntent {
+        interactor: second_interactor,
+        kind: crate::messages::InteractionIntentKind::Press,
+    });
+    app.update();
+
+    let log = app.world().resource::<TestLog>();
+    assert_eq!(log.failed, 1);
+    assert_eq!(
+        log.last_failed,
+        Some(InteractionAvailabilityReason::ReservedByOther)
+    );
+    assert!(
+        app.world()
+            .get::<ActiveInteraction>(second_interactor)
+            .is_none()
     );
 }

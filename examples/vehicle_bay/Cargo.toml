@@ -1,5 +1,5 @@
 [package]
-name = "saddle-interaction-example-multi-action"
+name = "saddle-interaction-example-vehicle-bay"
 version = "0.1.0"
 edition = "2024"
 publish = false

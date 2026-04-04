@@ -1,6 +1,6 @@
 # Saddle Interaction
 
-Reusable world-interaction substrate for Bevy: candidate detection, arbitration, sticky focus, gated prompts, hold or toggle execution, chained stages, cooldowns, and lifecycle messages.
+Reusable world-interaction substrate for Bevy: candidate detection, arbitration, sticky focus, gated prompts, hold or toggle execution, chained stages, cooldowns, exclusive reservations, and lifecycle messages.
 
 The crate stays generic. It decides which interaction is currently offered and when it starts, progresses, completes, or cancels. Consumer crates own the actual gameplay consequence such as opening a door, starting dialogue, consuming inventory, or playing bespoke VFX.
 
@@ -138,6 +138,8 @@ The crate examples use `bevy_enhanced_input` to translate gameplay actions into 
 | `gated` | `cargo run -p saddle-interaction-example-gated` | Tag-gated availability and unlock flow |
 | `accessibility` | `cargo run -p saddle-interaction-example-accessibility` | `hold_to_toggle` accessibility transform |
 | `prompt_ui` | `cargo run -p saddle-interaction-example-prompt-ui` | HUD prompt integration from prompt state only |
+| `vehicle_bay` | `cargo run -p saddle-interaction-example-vehicle-bay` | Exclusive seat reservation plus enter / exit gating |
+| `dialogue_terminal` | `cargo run -p saddle-interaction-example-dialogue-terminal` | Cross-crate comms terminal using interaction triggers, tweened UI panels, and animated dialogue text |
 | `saddle-interaction-lab` | `cargo run -p saddle-interaction-lab` | Rich crate-local showcase with BRP and E2E scenarios |
 
 ## Crate-Local Lab

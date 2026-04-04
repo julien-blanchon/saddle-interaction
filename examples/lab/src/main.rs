@@ -12,9 +12,10 @@ use saddle_interaction::{
     InteractionAvailabilityReason, InteractionCanceled, InteractionCompleted, InteractionConfig,
     InteractionDebugSettings, InteractionFailed, InteractionFocusedBy, InteractionIntent,
     InteractionIntentKind, InteractionOffered, InteractionPlugin, InteractionProgress,
-    InteractionSlot, InteractionStageAdvanced, InteractionTag, InteractionTags, InteractionTarget,
-    Interactor, InteractorAim,
+    InteractionReservationPolicy, InteractionSlot, InteractionStageAdvanced, InteractionTag,
+    InteractionTags, InteractionTarget, Interactor, InteractorAim,
 };
+use saddle_interaction_example_common::{DemoBaseTargetSlots, DemoInteractor, install_demo_pane};
 
 #[cfg(all(feature = "dev", not(target_arch = "wasm32")))]
 const DEFAULT_BRPP_PORT: u16 = 15_732;
@@ -23,22 +24,30 @@ const TARGET_SIZE: Vec2 = Vec2::new(92.0, 92.0);
 const PRIORITY_STATION_RANGE: f32 = 160.0;
 const HOLD_STATION_RANGE: f32 = 114.0;
 const SYSTEM_STATION_RANGE: f32 = 126.0;
+const VEHICLE_STATION_RANGE: f32 = 128.0;
 
 const PRIORITY_STATION_POSITION: Vec3 = Vec3::new(-210.0, 88.0, 4.0);
 const HOLD_STATION_POSITION: Vec3 = Vec3::new(-18.0, 0.0, 4.0);
 const MULTI_STATION_POSITION: Vec3 = Vec3::new(188.0, 120.0, 4.0);
 const GATED_STATION_POSITION: Vec3 = Vec3::new(190.0, -120.0, 4.0);
+const VEHICLE_STATION_POSITION: Vec3 = Vec3::new(10.0, -250.0, 4.0);
 
 const NEARBY_CRATE_POSITION: Vec3 = Vec3::new(-132.0, 60.0, 2.0);
 const PRIORITY_RELAY_POSITION: Vec3 = Vec3::new(-60.0, 112.0, 2.0);
 const HOLD_CONSOLE_POSITION: Vec3 = Vec3::new(90.0, 0.0, 2.0);
 const MULTI_PANEL_POSITION: Vec3 = Vec3::new(312.0, 120.0, 2.0);
 const GATED_DOOR_POSITION: Vec3 = Vec3::new(314.0, -120.0, 2.0);
+const ROVER_BODY_POSITION: Vec3 = Vec3::new(168.0, -250.0, 1.0);
+const VEHICLE_COCKPIT_POSITION: Vec3 = Vec3::new(168.0, -204.0, 2.0);
+const VEHICLE_EXIT_HATCH_POSITION: Vec3 = Vec3::new(168.0, -300.0, 2.0);
+const VEHICLE_SEATED_POSITION: Vec3 = Vec3::new(168.0, -274.0, 4.0);
 
 const PRIORITY_RELAY_NAME: &str = "Priority Relay";
 const HOLD_CONSOLE_NAME: &str = "Stabilizer Console";
 const MULTI_PANEL_NAME: &str = "Service Panel";
 const GATED_DOOR_NAME: &str = "Sealed Door";
+const VEHICLE_COCKPIT_NAME: &str = "Rover Cockpit";
+const VEHICLE_EXIT_NAME: &str = "Exit Hatch";
 
 #[derive(Component)]
 struct LabInteractor;
@@ -59,6 +68,8 @@ enum LabTargetKind {
     HoldConsole,
     MultiPanel,
     GatedDoor,
+    VehicleCockpit,
+    VehicleExitHatch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -67,6 +78,7 @@ pub enum LabStation {
     Hold,
     Multi,
     Gated,
+    Vehicle,
 }
 
 #[derive(Resource, Debug, Clone, Default, Reflect)]
@@ -88,6 +100,7 @@ pub struct LabDiagnostics {
     pub last_prompt_summary: Option<String>,
     pub last_stage_transition: Option<String>,
     pub actor_powered: bool,
+    pub actor_seated: bool,
     pub hold_to_toggle: bool,
 }
 
@@ -131,6 +144,10 @@ struct TogglePoweredAction;
 #[action_output(bool)]
 struct ToggleAccessibilityAction;
 
+#[derive(InputAction)]
+#[action_output(bool)]
+struct VehicleStationAction;
+
 fn main() {
     let mut app = App::new();
     app.insert_resource(ClearColor(Color::srgb(0.035, 0.04, 0.055)));
@@ -149,6 +166,7 @@ fn main() {
         }),
         ..default()
     }));
+    install_demo_pane(&mut app, false);
     app.add_plugins(EnhancedInputPlugin);
     app.add_input_context::<LabInputContext>();
     #[cfg(all(feature = "dev", not(target_arch = "wasm32")))]
@@ -166,6 +184,7 @@ fn main() {
     app.add_observer(on_hold_station);
     app.add_observer(on_multi_station);
     app.add_observer(on_gated_station);
+    app.add_observer(on_vehicle_station);
     app.add_observer(on_toggle_powered);
     app.add_observer(on_toggle_accessibility);
     app.add_systems(Startup, setup);
@@ -179,9 +198,11 @@ fn main() {
             record_failed_messages.after(saddle_interaction::InteractionSystems::Feedback),
             record_stage_messages.after(saddle_interaction::InteractionSystems::Feedback),
             record_progress_messages.after(saddle_interaction::InteractionSystems::Feedback),
+            handle_vehicle_completions.after(saddle_interaction::InteractionSystems::Feedback),
             update_diagnostics.after(saddle_interaction::InteractionSystems::Feedback),
             update_overlay.after(saddle_interaction::InteractionSystems::Feedback),
-        ),
+        )
+            .chain(),
     );
     app.run();
 }
@@ -228,10 +249,18 @@ fn setup(mut commands: Commands) {
         Vec2::new(300.0, 410.0),
         Color::srgb(0.10, 0.11, 0.14),
     );
+    spawn_zone(
+        &mut commands,
+        "Vehicle Bay Zone",
+        Vec3::new(120.0, -250.0, -1.0),
+        Vec2::new(350.0, 220.0),
+        Color::srgb(0.11, 0.11, 0.15),
+    );
 
     commands.spawn((
         Name::new("Interactor"),
         LabInteractor,
+        DemoInteractor,
         LabInputContext,
         Interactor {
             max_distance: Some(PRIORITY_STATION_RANGE),
@@ -286,6 +315,10 @@ fn setup(mut commands: Commands) {
             (
                 Action::<GatedStationAction>::new(),
                 bindings![KeyCode::Digit4],
+            ),
+            (
+                Action::<VehicleStationAction>::new(),
+                bindings![KeyCode::Digit5],
             ),
             (
                 Action::<TogglePoweredAction>::new(),
@@ -384,6 +417,58 @@ fn setup(mut commands: Commands) {
             }],
         },
     );
+    commands.spawn((
+        Name::new("Rover Body"),
+        Sprite::from_color(Color::srgb(0.22, 0.25, 0.31), Vec2::new(250.0, 176.0)),
+        Transform::from_translation(ROVER_BODY_POSITION),
+        GlobalTransform::from_translation(ROVER_BODY_POSITION),
+    ));
+    commands.spawn((
+        Name::new("Rover Canopy"),
+        Sprite::from_color(Color::srgba(0.34, 0.76, 0.96, 0.18), Vec2::new(168.0, 58.0)),
+        Transform::from_xyz(ROVER_BODY_POSITION.x, ROVER_BODY_POSITION.y + 58.0, 1.5),
+        GlobalTransform::from_translation(Vec3::new(
+            ROVER_BODY_POSITION.x,
+            ROVER_BODY_POSITION.y + 58.0,
+            1.5,
+        )),
+    ));
+    spawn_target(
+        &mut commands,
+        VEHICLE_COCKPIT_NAME,
+        LabTargetKind::VehicleCockpit,
+        VEHICLE_COCKPIT_POSITION,
+        Color::srgb(0.32, 0.62, 0.92),
+        Interactable::default(),
+        InteractionTarget {
+            slots: vec![InteractionSlot {
+                availability: InteractionAvailabilityConfig {
+                    blocked_actor_tags: vec![InteractionTag::from("seated")],
+                    ..default()
+                },
+                reservation: InteractionReservationPolicy::Exclusive,
+                ..InteractionSlot::instant("enter_vehicle", "Enter Rover")
+            }],
+        },
+    );
+    spawn_target(
+        &mut commands,
+        VEHICLE_EXIT_NAME,
+        LabTargetKind::VehicleExitHatch,
+        VEHICLE_EXIT_HATCH_POSITION,
+        Color::srgb(0.70, 0.76, 0.84),
+        Interactable::default(),
+        InteractionTarget {
+            slots: vec![InteractionSlot {
+                availability: InteractionAvailabilityConfig {
+                    required_actor_tags: vec![InteractionTag::from("seated")],
+                    ..default()
+                },
+                reservation: InteractionReservationPolicy::Exclusive,
+                ..InteractionSlot::instant("exit_vehicle", "Exit Rover")
+            }],
+        },
+    );
 
     commands.spawn((
         Name::new("Lab Overlay"),
@@ -430,6 +515,7 @@ fn spawn_target(
         Name::new(name.to_owned()),
         kind,
         LabTargetVisual,
+        DemoBaseTargetSlots(target.slots.clone()),
         interactable,
         target,
         Sprite {
@@ -548,6 +634,19 @@ fn on_gated_station(
     );
 }
 
+fn on_vehicle_station(
+    trigger: On<Start<VehicleStationAction>>,
+    mut commands: Commands,
+    interactors: Query<&Interactor, With<LabInteractor>>,
+) {
+    queue_station_change(
+        &mut commands,
+        &interactors,
+        trigger.context,
+        LabStation::Vehicle,
+    );
+}
+
 fn queue_station_change(
     commands: &mut Commands,
     interactors: &Query<&Interactor, With<LabInteractor>>,
@@ -641,6 +740,8 @@ fn base_target_color(kind: LabTargetKind) -> Color {
         LabTargetKind::HoldConsole => Color::srgb(0.86, 0.54, 0.24),
         LabTargetKind::MultiPanel => Color::srgb(0.40, 0.68, 0.42),
         LabTargetKind::GatedDoor => Color::srgb(0.70, 0.30, 0.32),
+        LabTargetKind::VehicleCockpit => Color::srgb(0.32, 0.62, 0.92),
+        LabTargetKind::VehicleExitHatch => Color::srgb(0.70, 0.76, 0.84),
     }
 }
 
@@ -722,6 +823,49 @@ fn record_progress_messages(
     }
 }
 
+fn handle_vehicle_completions(
+    mut commands: Commands,
+    mut reader: MessageReader<InteractionCompleted>,
+    interactor_tags: Query<&InteractionTags, With<LabInteractor>>,
+) {
+    for event in reader.read() {
+        let Ok(existing_tags) = interactor_tags.get(event.interactor) else {
+            continue;
+        };
+
+        let mut next_tags = existing_tags.clone();
+        let seated = InteractionTag::from("seated");
+
+        match event.slot_id.0.as_str() {
+            "enter_vehicle" => {
+                if !next_tags.contains(&seated) {
+                    next_tags.tags.push(seated);
+                }
+                commands.entity(event.interactor).insert((
+                    next_tags,
+                    Transform::from_translation(VEHICLE_SEATED_POSITION),
+                    GlobalTransform::from_translation(VEHICLE_SEATED_POSITION),
+                    InteractorAim {
+                        direction: (VEHICLE_EXIT_HATCH_POSITION - VEHICLE_SEATED_POSITION)
+                            .normalize_or_zero(),
+                    },
+                ));
+            }
+            "exit_vehicle" => {
+                next_tags.tags.retain(|tag| tag != &seated);
+                let (position, aim, _) = station_profile(LabStation::Vehicle);
+                commands.entity(event.interactor).insert((
+                    next_tags,
+                    Transform::from_translation(position),
+                    GlobalTransform::from_translation(position),
+                    InteractorAim { direction: aim },
+                ));
+            }
+            _ => {}
+        }
+    }
+}
+
 fn update_diagnostics(
     config: Res<InteractionConfig>,
     names: Query<&Name>,
@@ -754,6 +898,10 @@ fn update_diagnostics(
         .iter()
         .next()
         .is_some_and(|tags| tags.contains(&InteractionTag::from("powered")));
+    diagnostics.actor_seated = interactor_tags
+        .iter()
+        .next()
+        .is_some_and(|tags| tags.contains(&InteractionTag::from("seated")));
     diagnostics.hold_to_toggle = config.hold_to_toggle;
 }
 
@@ -763,8 +911,8 @@ fn update_overlay(
 ) {
     overlay.0 = format!(
         "interaction lab\n\
-         stations: arbitration | hold | multi-slot | gated\n\
-         controls: 1-4 jump stations | E confirm | Esc cancel | Tab/Q cycle | P power | T accessibility\n\
+         stations: arbitration | hold | multi-slot | gated | vehicle bay\n\
+         controls: 1-5 jump stations | E confirm | Esc cancel | Tab/Q cycle | P power | T accessibility\n\
          focus: {}\n\
          slot: {}\n\
          prompt: {}\n\
@@ -776,6 +924,7 @@ fn update_overlay(
          last failed: {}\n\
          stage: {}\n\
          powered tag: {}\n\
+         seated tag: {}\n\
          hold_to_toggle: {}\n\
          completed: {} canceled: {} failed: {} stage advances: {}",
         diagnostics.focused_target_name.as_deref().unwrap_or("none"),
@@ -796,6 +945,7 @@ fn update_overlay(
             .as_deref()
             .unwrap_or("none"),
         diagnostics.actor_powered,
+        diagnostics.actor_seated,
         diagnostics.hold_to_toggle,
         diagnostics.completed_count,
         diagnostics.canceled_count,
@@ -876,6 +1026,11 @@ fn station_profile(station: LabStation) -> (Vec3, Vec3, f32) {
             GATED_STATION_POSITION,
             (GATED_DOOR_POSITION - GATED_STATION_POSITION).normalize_or_zero(),
             SYSTEM_STATION_RANGE,
+        ),
+        LabStation::Vehicle => (
+            VEHICLE_STATION_POSITION,
+            (VEHICLE_COCKPIT_POSITION - VEHICLE_STATION_POSITION).normalize_or_zero(),
+            VEHICLE_STATION_RANGE,
         ),
     }
 }

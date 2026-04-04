@@ -16,6 +16,7 @@ pub fn list_scenarios() -> Vec<&'static str> {
         "interaction_hold_cancel",
         "interaction_multi_action_prompt",
         "interaction_accessibility_toggle_mode",
+        "interaction_vehicle_bay",
     ]
 }
 
@@ -28,6 +29,7 @@ pub fn scenario_by_name(name: &str) -> Option<Scenario> {
         "interaction_hold_cancel" => Some(interaction_hold_cancel()),
         "interaction_multi_action_prompt" => Some(interaction_multi_action_prompt()),
         "interaction_accessibility_toggle_mode" => Some(interaction_accessibility_toggle_mode()),
+        "interaction_vehicle_bay" => Some(interaction_vehicle_bay()),
         _ => None,
     }
 }
@@ -220,5 +222,46 @@ fn interaction_accessibility_toggle_mode() -> Scenario {
         .then(Action::Screenshot("accessibility_toggle".into()))
         .then(Action::WaitFrames(1))
         .then(assertions::log_summary("interaction_accessibility_toggle_mode"))
+        .build()
+}
+
+fn interaction_vehicle_bay() -> Scenario {
+    Scenario::builder("interaction_vehicle_bay")
+        .description("Enter the rover through the exclusive cockpit slot, verify the seated exit flow appears, then exit back to the staging pad.")
+        .then(accessibility(false))
+        .then(power(false))
+        .then(station(LabStation::Vehicle))
+        .then(Action::WaitFrames(8))
+        .then(assertions::custom("vehicle bay starts focused on the cockpit entry slot", |world| {
+            let diagnostics = world.resource::<LabDiagnostics>();
+            diagnostics.focused_target_name.as_deref() == Some("Rover Cockpit")
+                && diagnostics.prompt_label.as_deref() == Some("Enter Rover")
+                && !diagnostics.actor_seated
+        }))
+        .then(Action::Screenshot("vehicle_ready".into()))
+        .then(Action::WaitFrames(1))
+        .then(intent(InteractionIntentKind::Press))
+        .then(Action::WaitFrames(5))
+        .then(assertions::custom("entering the rover grants the seated tag and surfaces the exit slot", |world| {
+            let diagnostics = world.resource::<LabDiagnostics>();
+            diagnostics.last_completed_slot.as_deref() == Some("enter_vehicle")
+                && diagnostics.actor_seated
+                && diagnostics.focused_target_name.as_deref() == Some("Exit Hatch")
+                && diagnostics.prompt_label.as_deref() == Some("Exit Rover")
+        }))
+        .then(Action::Screenshot("vehicle_seated".into()))
+        .then(Action::WaitFrames(1))
+        .then(intent(InteractionIntentKind::Press))
+        .then(Action::WaitFrames(5))
+        .then(assertions::custom("exiting the rover clears the seated tag and restores the entry prompt", |world| {
+            let diagnostics = world.resource::<LabDiagnostics>();
+            diagnostics.last_completed_slot.as_deref() == Some("exit_vehicle")
+                && !diagnostics.actor_seated
+                && diagnostics.prompt_label.as_deref() == Some("Enter Rover")
+                && diagnostics.completed_count == 2
+        }))
+        .then(Action::Screenshot("vehicle_exit".into()))
+        .then(Action::WaitFrames(1))
+        .then(assertions::log_summary("interaction_vehicle_bay"))
         .build()
 }
