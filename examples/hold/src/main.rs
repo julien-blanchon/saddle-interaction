@@ -12,7 +12,7 @@ use saddle_interaction::{
     InteractionPromptState, InteractionSlot, InteractionTarget, Interactor,
 };
 use saddle_interaction_example_common::{
-    DemoBaseTargetSlots, DemoInteractor, install_demo_pane, InteractionDemoPane,
+    DemoBaseTargetSlots, DemoInteractor, InteractionDemoPane, install_demo_pane,
 };
 
 // ---------------------------------------------------------------------------
@@ -116,8 +116,8 @@ fn setup_scene(mut commands: Commands) {
         DemoInteractor,
         InteractorContext,
         Interactor {
-            max_distance: Some(6.0),
-            proximity_radius: Some(6.0),
+            max_distance: Some(500.0),
+            proximity_radius: Some(500.0),
             ..default()
         },
         Sprite {

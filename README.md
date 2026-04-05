@@ -144,7 +144,7 @@ The crate examples use `bevy_enhanced_input` to translate gameplay actions into 
 
 ## Crate-Local Lab
 
-The crate ships a richer lab app under [`examples/lab/README.md`](/Users/julienblanchon/Git/bevy_starter/shared/interaction/saddle-interaction/examples/lab/README.md). It exposes:
+The crate ships a richer lab app under [`examples/lab/README.md`](examples/lab/README.md). It exposes:
 
 - arbitration between competing targets
 - hold progress and cancellation
@@ -152,6 +152,20 @@ The crate ships a richer lab app under [`examples/lab/README.md`](/Users/julienb
 - gated prompt availability
 - BRP-friendly diagnostics via `LabDiagnostics`
 - E2E scenarios for smoke, focus priority, hold complete, hold cancel, prompt switching, and accessibility toggle mode
+
+## 2D Projects
+
+With `Camera2d`, one world unit equals one screen pixel. The default `InteractionConfig` distances (3–4 units) are tuned for 3D scenes. For 2D, override per-actor or globally:
+
+```rust
+Interactor {
+    max_distance: Some(500.0),
+    proximity_radius: Some(500.0),
+    ..default()
+}
+```
+
+See `docs/configuration.md` → **2D (Camera2d) Tuning** for details.
 
 ## Consumer Responsibilities
 
@@ -166,5 +180,5 @@ Consumer systems should read the crate’s public messages and components, then 
 
 ## Documentation
 
-- [`docs/architecture.md`](/Users/julienblanchon/Git/bevy_starter/shared/interaction/saddle-interaction/docs/architecture.md)
-- [`docs/configuration.md`](/Users/julienblanchon/Git/bevy_starter/shared/interaction/saddle-interaction/docs/configuration.md)
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/configuration.md`](docs/configuration.md)

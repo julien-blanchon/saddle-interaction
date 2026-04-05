@@ -13,7 +13,7 @@ use saddle_interaction::{
     InteractionPromptState, InteractionSlot, InteractionTarget, Interactor,
 };
 use saddle_interaction_example_common::{
-    DemoBaseTargetSlots, DemoInteractor, install_demo_pane, InteractionDemoPane,
+    DemoBaseTargetSlots, DemoInteractor, InteractionDemoPane, install_demo_pane,
 };
 
 // ---------------------------------------------------------------------------
@@ -78,13 +78,11 @@ fn main() {
     // Accessibility config: hold_to_toggle converts hold interactions into
     // press-once-to-start, press-again-to-confirm toggles.
     // mash_auto_complete lets rapid key mashing auto-complete held interactions.
-    app.add_plugins(
-        InteractionPlugin::default().with_config(InteractionConfig {
-            hold_to_toggle: true,
-            mash_auto_complete: true,
-            ..default()
-        }),
-    );
+    app.add_plugins(InteractionPlugin::default().with_config(InteractionConfig {
+        hold_to_toggle: true,
+        mash_auto_complete: true,
+        ..default()
+    }));
 
     app.add_observer(on_interact_start);
     app.add_observer(on_interact_release);
@@ -126,8 +124,8 @@ fn setup_scene(mut commands: Commands) {
         DemoInteractor,
         InteractorContext,
         Interactor {
-            max_distance: Some(6.0),
-            proximity_radius: Some(6.0),
+            max_distance: Some(500.0),
+            proximity_radius: Some(500.0),
             ..default()
         },
         Sprite {

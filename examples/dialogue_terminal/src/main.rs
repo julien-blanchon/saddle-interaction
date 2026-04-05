@@ -108,7 +108,7 @@ struct DialogueState {
 #[derive(Resource, Clone, Pane)]
 #[pane(title = "Dialogue Terminal")]
 struct DialogueTerminalPane {
-    #[pane(slider, min = 3.0, max = 10.0, step = 0.1)]
+    #[pane(slider, min = 50.0, max = 500.0, step = 10.0)]
     interactor_range: f32,
     #[pane(slider, min = 0.2, max = 2.5, step = 0.05)]
     uplink_hold_secs: f32,
@@ -125,7 +125,7 @@ struct DialogueTerminalPane {
 impl Default for DialogueTerminalPane {
     fn default() -> Self {
         Self {
-            interactor_range: 5.8,
+            interactor_range: 200.0,
             uplink_hold_secs: 0.9,
             panel_speed_units: 560.0,
             panel_opacity: 0.96,
@@ -201,8 +201,10 @@ fn main() {
                 .before(saddle_animation_text_animation::TextAnimationSystems::Advance),
             record_prompt_messages.after(saddle_interaction::InteractionSystems::Feedback),
             record_progress_messages.after(saddle_interaction::InteractionSystems::Feedback),
-            record_reveal_sounds.after(saddle_animation_text_animation::TextAnimationSystems::Advance),
-            record_text_completions.after(saddle_animation_text_animation::TextAnimationSystems::Advance),
+            record_reveal_sounds
+                .after(saddle_animation_text_animation::TextAnimationSystems::Advance),
+            record_text_completions
+                .after(saddle_animation_text_animation::TextAnimationSystems::Advance),
             record_tween_messages.after(saddle_animation_tween::TweenSystems::Cleanup),
             tint_terminal.after(saddle_interaction::InteractionSystems::Feedback),
             update_footer,
@@ -259,7 +261,7 @@ fn setup(mut commands: Commands, pane: Res<DialogueTerminalPane>) {
             Name::new("Comms Terminal"),
             Terminal,
             Interactable {
-                focus_radius: Some(pane.interactor_range),
+                focus_radius: Some(200.0),
                 priority: 1.0,
                 ..default()
             },
@@ -287,8 +289,8 @@ fn setup(mut commands: Commands, pane: Res<DialogueTerminalPane>) {
         PilotContext,
         PilotMotion::default(),
         Interactor {
-            max_distance: Some(pane.interactor_range),
-            proximity_radius: Some(pane.interactor_range),
+            max_distance: Some(200.0),
+            proximity_radius: Some(200.0),
             ..default()
         },
         Sprite::from_color(Color::srgb(0.95, 0.76, 0.24), Vec2::new(50.0, 62.0)),
@@ -328,10 +330,12 @@ fn setup(mut commands: Commands, pane: Res<DialogueTerminalPane>) {
                 top: px(72.0),
                 width: px(470.0),
                 min_height: px(316.0),
+                max_height: px(700.0),
                 padding: UiRect::all(px(22.0)),
                 row_gap: px(14.0),
                 flex_direction: FlexDirection::Column,
                 border_radius: BorderRadius::all(px(26.0)),
+                overflow: Overflow::clip(),
                 ..default()
             },
             UiTransform::from_translation(Val2::px(PANEL_HIDDEN_OFFSET.x, PANEL_HIDDEN_OFFSET.y)),
@@ -349,24 +353,24 @@ fn setup(mut commands: Commands, pane: Res<DialogueTerminalPane>) {
             ));
             body = panel
                 .spawn((
-                Name::new("Panel Body"),
-                DialogueBody,
-                Text::new(""),
-                TextFont {
-                    font_size: 29.0,
-                    ..default()
-                },
-                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.0)),
-                TextAnimationMarkup::single(""),
-                TextRevealSound {
-                    cue_id: "dialogue.terminal.blip".into(),
-                    ..default()
-                },
-                TextAnimationBundle {
-                    config: TextAnimationConfig::typewriter(pane.reveal_units_per_second),
-                    ..default()
-                },
-            ))
+                    Name::new("Panel Body"),
+                    DialogueBody,
+                    Text::new(""),
+                    TextFont {
+                        font_size: 29.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.0)),
+                    TextAnimationMarkup::single(""),
+                    TextRevealSound {
+                        cue_id: "dialogue.terminal.blip".into(),
+                        ..default()
+                    },
+                    TextAnimationBundle {
+                        config: TextAnimationConfig::typewriter(pane.reveal_units_per_second),
+                        ..default()
+                    },
+                ))
                 .id();
             panel.spawn((
                 Name::new("Panel Footer"),
@@ -523,7 +527,14 @@ fn sync_pane(
     scene: Res<DialogueScene>,
     state: Res<DialogueState>,
     mut interactors: Query<&mut Interactor, With<Pilot>>,
-    mut terminals: Query<(&mut Interactable, &mut InteractionTarget, &BaseTerminalSlots), With<Terminal>>,
+    mut terminals: Query<
+        (
+            &mut Interactable,
+            &mut InteractionTarget,
+            &BaseTerminalSlots,
+        ),
+        With<Terminal>,
+    >,
     mut text: Query<&mut TextAnimationConfig, With<DialogueBody>>,
     mut panel: Query<&mut BackgroundColor, With<TerminalPanel>>,
 ) {
@@ -541,11 +552,10 @@ fn sync_pane(
         target.slots = base.0.clone();
         for slot in &mut target.slots {
             if slot.id.0 == SLOT_UPLINK {
-                slot.behavior = InteractionBehavior::Single(
-                    saddle_interaction::InteractionExecution::Hold {
+                slot.behavior =
+                    InteractionBehavior::Single(saddle_interaction::InteractionExecution::Hold {
                         duration_seconds: pane.uplink_hold_secs,
-                    },
-                );
+                    });
             }
         }
     }
@@ -554,7 +564,9 @@ fn sync_pane(
         config.typewriter.units_per_second = pane.reveal_units_per_second;
     }
 
-    if state.panel_open && let Ok(mut background) = panel.get_mut(scene.panel) {
+    if state.panel_open
+        && let Ok(mut background) = panel.get_mut(scene.panel)
+    {
         background.0 = Color::srgba(0.06, 0.10, 0.15, pane.panel_opacity);
     }
 }
@@ -678,33 +690,29 @@ fn spawn_panel_tween(
             .build(),
     ]);
 
-    commands.spawn(TweenBundle::new(
-        TweenPlayer::new(tween).with_label(if open {
+    commands.spawn(TweenBundle::new(TweenPlayer::new(tween).with_label(
+        if open {
             "dialogue panel open"
         } else {
             "dialogue panel close"
-        }),
-    ));
+        },
+    )));
 }
 
 fn spawn_terminal_pulse(commands: &mut Commands, glow: Entity) {
     let tween = Tween::sequence([
-        Tween::parallel([
-            transform_scale(glow)
-                .from_current()
-                .to(Vec3::splat(1.16))
-                .duration_secs(0.12)
-                .ease(EaseFunction::SineOut)
-                .build(),
-        ]),
-        Tween::parallel([
-            transform_scale(glow)
-                .from_current()
-                .to(Vec3::ONE)
-                .duration_secs(0.18)
-                .ease(EaseFunction::SineInOut)
-                .build(),
-        ]),
+        Tween::parallel([transform_scale(glow)
+            .from_current()
+            .to(Vec3::splat(1.16))
+            .duration_secs(0.12)
+            .ease(EaseFunction::SineOut)
+            .build()]),
+        Tween::parallel([transform_scale(glow)
+            .from_current()
+            .to(Vec3::ONE)
+            .duration_secs(0.18)
+            .ease(EaseFunction::SineInOut)
+            .build()]),
     ]);
 
     commands.spawn(TweenBundle::new(
@@ -855,9 +863,5 @@ fn update_overlay(
 }
 
 fn display_field(value: &str) -> &str {
-    if value.is_empty() {
-        "waiting"
-    } else {
-        value
-    }
+    if value.is_empty() { "waiting" } else { value }
 }
