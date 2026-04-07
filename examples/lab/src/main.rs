@@ -1,3 +1,17 @@
+//! # Interaction Lab
+//!
+//! Comprehensive showcase combining all interaction features in a single 3D
+//! room. Number keys 1–6 teleport the player between stations. Includes BRP
+//! inspection (dev) and E2E scenarios (e2e feature).
+//!
+//! Stations:
+//! 1. **Instant** — Chest (Open)
+//! 2. **Hold** — Valve (Turn, 0.75s)
+//! 3. **Multi-slot** — Terminal (Hack / Read)
+//! 4. **Sequence** — Lever (Prime → Pull → Reset, loops)
+//! 5. **Gated** — Generator + Door (tag-gated)
+//! 6. **Vehicle** — Cockpit + Exit Hatch (exclusive reservation)
+
 #[cfg(feature = "e2e")]
 mod e2e;
 #[cfg(feature = "e2e")]
@@ -6,80 +20,75 @@ mod scenarios;
 use bevy::prelude::*;
 #[cfg(all(feature = "dev", not(target_arch = "wasm32")))]
 use bevy_brp_extras::BrpExtrasPlugin;
-use bevy_enhanced_input::prelude::{Cancel as InputCancel, *};
 use saddle_interaction::{
     ActiveInteraction, FocusedInteraction, Interactable, InteractionAvailabilityConfig,
-    InteractionAvailabilityReason, InteractionCanceled, InteractionCompleted, InteractionConfig,
-    InteractionDebugSettings, InteractionFailed, InteractionFocusedBy, InteractionIntent,
-    InteractionIntentKind, InteractionOffered, InteractionPlugin, InteractionProgress,
-    InteractionReservationPolicy, InteractionSlot, InteractionStageAdvanced, InteractionTag,
-    InteractionTags, InteractionTarget, Interactor, InteractorAim,
+    InteractionBehavior, InteractionCanceled, InteractionCompleted, InteractionConfig,
+    InteractionDebugSettings, InteractionExecution, InteractionFailed, InteractionIntent,
+    InteractionIntentKind, InteractionPrompt, InteractionPromptState,
+    InteractionReservationPolicy, InteractionSlot, InteractionStage, InteractionStageAdvanced,
+    InteractionTag, InteractionTags, InteractionTarget, Interactor, SequenceAdvanceMode,
 };
-use saddle_interaction_example_common::{DemoBaseTargetSlots, DemoInteractor, install_demo_pane};
+use saddle_interaction_example_common as common;
+use common::{DemoBaseTargetSlots, DemoPlayer, DemoPlayerController};
 
-#[cfg(all(feature = "dev", not(target_arch = "wasm32")))]
-const DEFAULT_BRPP_PORT: u16 = 15_732;
-const INTERACTOR_SIZE: Vec2 = Vec2::new(44.0, 44.0);
-const TARGET_SIZE: Vec2 = Vec2::new(92.0, 92.0);
-const PRIORITY_STATION_RANGE: f32 = 160.0;
-const HOLD_STATION_RANGE: f32 = 114.0;
-const SYSTEM_STATION_RANGE: f32 = 126.0;
-const VEHICLE_STATION_RANGE: f32 = 128.0;
-
-const PRIORITY_STATION_POSITION: Vec3 = Vec3::new(-210.0, 88.0, 4.0);
-const HOLD_STATION_POSITION: Vec3 = Vec3::new(-18.0, 0.0, 4.0);
-const MULTI_STATION_POSITION: Vec3 = Vec3::new(188.0, 120.0, 4.0);
-const GATED_STATION_POSITION: Vec3 = Vec3::new(190.0, -120.0, 4.0);
-const VEHICLE_STATION_POSITION: Vec3 = Vec3::new(10.0, -250.0, 4.0);
-
-const NEARBY_CRATE_POSITION: Vec3 = Vec3::new(-132.0, 60.0, 2.0);
-const PRIORITY_RELAY_POSITION: Vec3 = Vec3::new(-60.0, 112.0, 2.0);
-const HOLD_CONSOLE_POSITION: Vec3 = Vec3::new(90.0, 0.0, 2.0);
-const MULTI_PANEL_POSITION: Vec3 = Vec3::new(312.0, 120.0, 2.0);
-const GATED_DOOR_POSITION: Vec3 = Vec3::new(314.0, -120.0, 2.0);
-const ROVER_BODY_POSITION: Vec3 = Vec3::new(168.0, -250.0, 1.0);
-const VEHICLE_COCKPIT_POSITION: Vec3 = Vec3::new(168.0, -204.0, 2.0);
-const VEHICLE_EXIT_HATCH_POSITION: Vec3 = Vec3::new(168.0, -300.0, 2.0);
-const VEHICLE_SEATED_POSITION: Vec3 = Vec3::new(168.0, -274.0, 4.0);
-
-const PRIORITY_RELAY_NAME: &str = "Priority Relay";
-const HOLD_CONSOLE_NAME: &str = "Stabilizer Console";
-const MULTI_PANEL_NAME: &str = "Service Panel";
-const GATED_DOOR_NAME: &str = "Sealed Door";
-const VEHICLE_COCKPIT_NAME: &str = "Rover Cockpit";
-const VEHICLE_EXIT_NAME: &str = "Exit Hatch";
-
-#[derive(Component)]
-struct LabInteractor;
-
-#[derive(Component)]
-struct LabTargetVisual;
-
-#[derive(Component)]
-struct LabOverlay;
-
-#[derive(Component)]
-struct LabInputContext;
-
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum LabTargetKind {
-    NearbyCrate,
-    PriorityRelay,
-    HoldConsole,
-    MultiPanel,
-    GatedDoor,
-    VehicleCockpit,
-    VehicleExitHatch,
-}
+// ---------------------------------------------------------------------------
+// Station layout (3D positions)
+// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LabStation {
-    Priority,
+    Instant,
     Hold,
     Multi,
+    Sequence,
     Gated,
     Vehicle,
 }
+
+struct StationProfile {
+    player_pos: Vec3,
+    look_at: Vec3,
+    range: f32,
+}
+
+fn station_profile(station: LabStation) -> StationProfile {
+    match station {
+        LabStation::Instant => StationProfile {
+            player_pos: Vec3::new(-8.0, 1.6, 5.0),
+            look_at: Vec3::new(-8.0, 0.4, 0.0),
+            range: 8.0,
+        },
+        LabStation::Hold => StationProfile {
+            player_pos: Vec3::new(-3.0, 1.6, 5.0),
+            look_at: Vec3::new(-3.0, 0.6, 0.0),
+            range: 8.0,
+        },
+        LabStation::Multi => StationProfile {
+            player_pos: Vec3::new(2.0, 1.6, 5.0),
+            look_at: Vec3::new(2.0, 0.7, 0.0),
+            range: 8.0,
+        },
+        LabStation::Sequence => StationProfile {
+            player_pos: Vec3::new(7.0, 1.6, 5.0),
+            look_at: Vec3::new(7.0, 0.8, 0.0),
+            range: 8.0,
+        },
+        LabStation::Gated => StationProfile {
+            player_pos: Vec3::new(-5.0, 1.6, -5.0),
+            look_at: Vec3::new(-5.0, 0.6, -10.0),
+            range: 10.0,
+        },
+        LabStation::Vehicle => StationProfile {
+            player_pos: Vec3::new(5.0, 1.6, -5.0),
+            look_at: Vec3::new(5.0, 0.5, -10.0),
+            range: 10.0,
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
 
 #[derive(Resource, Debug, Clone, Default, Reflect)]
 #[reflect(Resource)]
@@ -97,973 +106,534 @@ pub struct LabDiagnostics {
     pub last_completed_slot: Option<String>,
     pub last_canceled_reason: Option<String>,
     pub last_failed_reason: Option<String>,
-    pub last_prompt_summary: Option<String>,
     pub last_stage_transition: Option<String>,
     pub actor_powered: bool,
     pub actor_seated: bool,
     pub hold_to_toggle: bool,
 }
 
-#[derive(InputAction)]
-#[action_output(bool)]
-struct InteractAction;
+#[derive(Component)]
+struct LabOverlay;
+
+// ---------------------------------------------------------------------------
+// Station teleport input
+// ---------------------------------------------------------------------------
+
+use bevy_enhanced_input::prelude::*;
 
 #[derive(InputAction)]
 #[action_output(bool)]
-struct CancelAction;
-
+struct Station1Action;
 #[derive(InputAction)]
 #[action_output(bool)]
-struct NextSlotAction;
-
+struct Station2Action;
 #[derive(InputAction)]
 #[action_output(bool)]
-struct PrevSlotAction;
-
+struct Station3Action;
 #[derive(InputAction)]
 #[action_output(bool)]
-struct PriorityStationAction;
-
+struct Station4Action;
 #[derive(InputAction)]
 #[action_output(bool)]
-struct HoldStationAction;
-
+struct Station5Action;
 #[derive(InputAction)]
 #[action_output(bool)]
-struct MultiStationAction;
-
+struct Station6Action;
 #[derive(InputAction)]
 #[action_output(bool)]
-struct GatedStationAction;
+struct TogglePowerAction;
 
-#[derive(InputAction)]
-#[action_output(bool)]
-struct TogglePoweredAction;
+#[derive(Component)]
+struct LabInputContext;
 
-#[derive(InputAction)]
-#[action_output(bool)]
-struct ToggleAccessibilityAction;
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 
-#[derive(InputAction)]
-#[action_output(bool)]
-struct VehicleStationAction;
+#[cfg(all(feature = "dev", not(target_arch = "wasm32")))]
+const DEFAULT_BRP_PORT: u16 = 15_732;
 
-fn main() {
-    let mut app = App::new();
-    app.insert_resource(ClearColor(Color::srgb(0.035, 0.04, 0.055)));
-    app.insert_resource(lab_config());
+fn main() -> AppExit {
+    let mut app = common::base_app("interaction lab");
+
     app.insert_resource(InteractionDebugSettings {
         enabled: true,
         ..default()
     });
     app.init_resource::<LabDiagnostics>();
     app.register_type::<LabDiagnostics>();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "interaction crate-local lab".into(),
-            resolution: (1460, 860).into(),
-            ..default()
-        }),
-        ..default()
-    }));
-    install_demo_pane(&mut app, false);
-    app.add_plugins(EnhancedInputPlugin);
+
+    // Extra input context for station switching
     app.add_input_context::<LabInputContext>();
+
     #[cfg(all(feature = "dev", not(target_arch = "wasm32")))]
-    app.add_plugins(BrpExtrasPlugin::with_port(lab_brp_port()));
+    {
+        let port = std::env::var("BRP_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_BRP_PORT);
+        app.add_plugins(BrpExtrasPlugin::with_port(port));
+    }
+
     #[cfg(feature = "e2e")]
     app.add_plugins(e2e::InteractionLabE2EPlugin);
-    app.add_plugins(InteractionPlugin::default());
-    app.add_observer(on_interact_start);
-    app.add_observer(on_interact_release);
-    app.add_observer(on_interact_cancel);
-    app.add_observer(on_explicit_cancel);
-    app.add_observer(on_next_slot);
-    app.add_observer(on_prev_slot);
-    app.add_observer(on_priority_station);
-    app.add_observer(on_hold_station);
-    app.add_observer(on_multi_station);
-    app.add_observer(on_gated_station);
-    app.add_observer(on_vehicle_station);
-    app.add_observer(on_toggle_powered);
-    app.add_observer(on_toggle_accessibility);
+
+    // Station teleport observers
+    app.add_observer(on_station::<Station1Action, { LabStation::Instant as u8 }>);
+    app.add_observer(on_station::<Station2Action, { LabStation::Hold as u8 }>);
+    app.add_observer(on_station::<Station3Action, { LabStation::Multi as u8 }>);
+    app.add_observer(on_station::<Station4Action, { LabStation::Sequence as u8 }>);
+    app.add_observer(on_station::<Station5Action, { LabStation::Gated as u8 }>);
+    app.add_observer(on_station::<Station6Action, { LabStation::Vehicle as u8 }>);
+    app.add_observer(on_toggle_power);
+
     app.add_systems(Startup, setup);
     app.add_systems(
         Update,
         (
-            tint_targets.after(saddle_interaction::InteractionSystems::Feedback),
-            record_prompt_messages.after(saddle_interaction::InteractionSystems::Feedback),
-            record_completed_messages.after(saddle_interaction::InteractionSystems::Feedback),
-            record_canceled_messages.after(saddle_interaction::InteractionSystems::Feedback),
-            record_failed_messages.after(saddle_interaction::InteractionSystems::Feedback),
-            record_stage_messages.after(saddle_interaction::InteractionSystems::Feedback),
-            record_progress_messages.after(saddle_interaction::InteractionSystems::Feedback),
-            handle_vehicle_completions.after(saddle_interaction::InteractionSystems::Feedback),
-            update_diagnostics.after(saddle_interaction::InteractionSystems::Feedback),
-            update_overlay.after(saddle_interaction::InteractionSystems::Feedback),
+            update_diagnostics,
+            record_completed,
+            record_canceled,
+            record_failed,
+            record_stage_advanced,
+            handle_generator,
+            handle_vehicle,
+            update_lab_overlay,
         )
-            .chain(),
+            .chain()
+            .after(saddle_interaction::InteractionSystems::Feedback),
     );
-    app.run();
+
+    app.run()
 }
 
-fn lab_config() -> InteractionConfig {
-    InteractionConfig {
-        default_max_distance: 160.0,
-        default_proximity_radius: 160.0,
-        hysteresis: 0.22,
-        default_input_buffer_seconds: 0.16,
-        ..default()
-    }
-}
+// ---------------------------------------------------------------------------
+// Setup
+// ---------------------------------------------------------------------------
 
-#[cfg(all(feature = "dev", not(target_arch = "wasm32")))]
-fn lab_brp_port() -> u16 {
-    std::env::var("BRP_EXTRAS_PORT")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(DEFAULT_BRPP_PORT)
-}
+fn setup(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    common::spawn_environment(&mut commands, &mut meshes, &mut materials);
 
-fn setup(mut commands: Commands) {
-    commands.spawn((Name::new("Lab Camera"), Camera2d));
-
-    spawn_zone(
-        &mut commands,
-        "Priority Zone",
-        Vec3::new(-120.0, 88.0, -1.0),
-        Vec2::new(330.0, 240.0),
-        Color::srgb(0.11, 0.13, 0.16),
-    );
-    spawn_zone(
-        &mut commands,
-        "Hold Zone",
-        Vec3::new(35.0, 0.0, -1.0),
-        Vec2::new(250.0, 210.0),
-        Color::srgb(0.10, 0.12, 0.15),
-    );
-    spawn_zone(
-        &mut commands,
-        "Systems Zone",
-        Vec3::new(295.0, 0.0, -1.0),
-        Vec2::new(300.0, 410.0),
-        Color::srgb(0.10, 0.11, 0.14),
-    );
-    spawn_zone(
-        &mut commands,
-        "Vehicle Bay Zone",
-        Vec3::new(120.0, -250.0, -1.0),
-        Vec2::new(350.0, 220.0),
-        Color::srgb(0.11, 0.11, 0.15),
-    );
-
-    commands.spawn((
-        Name::new("Interactor"),
-        LabInteractor,
-        DemoInteractor,
+    // Player — starts at Station 1 (Instant)
+    let player = common::spawn_player(&mut commands, Vec3::new(-8.0, 1.6, 5.0));
+    commands.entity(player).insert((
         LabInputContext,
-        Interactor {
-            max_distance: Some(PRIORITY_STATION_RANGE),
-            proximity_radius: Some(PRIORITY_STATION_RANGE),
-            hysteresis: Some(0.24),
-            distance_weight: 1.0,
-            alignment_weight: 0.2,
-            target_priority_weight: 1.0,
-            slot_priority_weight: 0.5,
-            ..default()
-        },
-        InteractorAim {
-            direction: station_profile(LabStation::Priority).1,
-        },
-        InteractionTags::default(),
-        Sprite {
-            color: Color::srgb(0.14, 0.80, 0.96),
-            custom_size: Some(INTERACTOR_SIZE),
-            ..default()
-        },
-        Transform::from_translation(PRIORITY_STATION_POSITION),
-        GlobalTransform::from_translation(PRIORITY_STATION_POSITION),
         actions!(LabInputContext[
-            (
-                Action::<InteractAction>::new(),
-                bindings![KeyCode::KeyE, GamepadButton::South],
-            ),
-            (
-                Action::<CancelAction>::new(),
-                bindings![KeyCode::Escape, GamepadButton::East],
-            ),
-            (
-                Action::<NextSlotAction>::new(),
-                bindings![KeyCode::Tab],
-            ),
-            (
-                Action::<PrevSlotAction>::new(),
-                bindings![KeyCode::KeyQ],
-            ),
-            (
-                Action::<PriorityStationAction>::new(),
-                bindings![KeyCode::Digit1],
-            ),
-            (
-                Action::<HoldStationAction>::new(),
-                bindings![KeyCode::Digit2],
-            ),
-            (
-                Action::<MultiStationAction>::new(),
-                bindings![KeyCode::Digit3],
-            ),
-            (
-                Action::<GatedStationAction>::new(),
-                bindings![KeyCode::Digit4],
-            ),
-            (
-                Action::<VehicleStationAction>::new(),
-                bindings![KeyCode::Digit5],
-            ),
-            (
-                Action::<TogglePoweredAction>::new(),
-                bindings![KeyCode::KeyP],
-            ),
-            (
-                Action::<ToggleAccessibilityAction>::new(),
-                bindings![KeyCode::KeyT],
-            ),
+            (Action::<Station1Action>::new(), bindings![KeyCode::Digit1]),
+            (Action::<Station2Action>::new(), bindings![KeyCode::Digit2]),
+            (Action::<Station3Action>::new(), bindings![KeyCode::Digit3]),
+            (Action::<Station4Action>::new(), bindings![KeyCode::Digit4]),
+            (Action::<Station5Action>::new(), bindings![KeyCode::Digit5]),
+            (Action::<Station6Action>::new(), bindings![KeyCode::Digit6]),
+            (Action::<TogglePowerAction>::new(), bindings![KeyCode::KeyP]),
         ]),
     ));
 
-    spawn_target(
-        &mut commands,
-        "Nearby Crate",
-        LabTargetKind::NearbyCrate,
-        NEARBY_CRATE_POSITION,
-        Color::srgb(0.44, 0.49, 0.56),
-        Interactable::default(),
-        InteractionTarget {
-            slots: vec![InteractionSlot::instant("inspect_crate", "Inspect")],
-        },
+    // --- Station 1: Instant (Chest) ---
+    let slots = vec![InteractionSlot::instant("open", "Open")];
+    let chest = common::spawn_prop(
+        &mut commands, &mut meshes, &mut materials,
+        "Chest", common::PropShape::Cube(Vec3::new(1.0, 0.8, 0.7)),
+        Vec3::new(-8.0, 0.4, 0.0), Color::srgb(0.55, 0.35, 0.15),
     );
-    spawn_target(
-        &mut commands,
-        PRIORITY_RELAY_NAME,
-        LabTargetKind::PriorityRelay,
-        PRIORITY_RELAY_POSITION,
-        Color::srgb(0.24, 0.55, 0.96),
-        Interactable {
-            priority: 0.8,
-            ..default()
-        },
-        InteractionTarget {
-            slots: vec![InteractionSlot {
-                priority: 0.7,
-                ..InteractionSlot::instant("reroute", "Reroute")
-            }],
-        },
-    );
-    spawn_target(
-        &mut commands,
-        HOLD_CONSOLE_NAME,
-        LabTargetKind::HoldConsole,
-        HOLD_CONSOLE_POSITION,
-        Color::srgb(0.86, 0.54, 0.24),
+    commands.entity(chest).insert((
+        DemoBaseTargetSlots(slots.clone()),
         Interactable::default(),
-        InteractionTarget {
-            slots: vec![InteractionSlot {
-                behavior: saddle_interaction::InteractionBehavior::Single(
-                    saddle_interaction::InteractionExecution::Hold {
-                        duration_seconds: 0.75,
-                    },
-                ),
-                ..InteractionSlot::instant("stabilize", "Stabilize")
-            }],
-        },
+        InteractionTarget { slots },
+    ));
+
+    // --- Station 2: Hold (Valve) ---
+    let slots = vec![InteractionSlot {
+        behavior: InteractionBehavior::Single(InteractionExecution::Hold {
+            duration_seconds: 0.75,
+        }),
+        ..InteractionSlot::instant("stabilize", "Stabilize")
+    }];
+    let valve = common::spawn_prop(
+        &mut commands, &mut meshes, &mut materials,
+        "Valve", common::PropShape::Cylinder { radius: 0.4, height: 1.2 },
+        Vec3::new(-3.0, 0.6, 0.0), Color::srgb(0.7, 0.2, 0.15),
     );
-    spawn_target(
-        &mut commands,
-        MULTI_PANEL_NAME,
-        LabTargetKind::MultiPanel,
-        MULTI_PANEL_POSITION,
-        Color::srgb(0.40, 0.68, 0.42),
+    commands.entity(valve).insert((
+        DemoBaseTargetSlots(slots.clone()),
         Interactable::default(),
-        InteractionTarget {
-            slots: vec![
-                InteractionSlot {
-                    priority: 1.1,
-                    ..InteractionSlot::instant("hack", "Hack")
-                },
-                InteractionSlot {
-                    priority: 0.1,
-                    ..InteractionSlot::instant("read", "Read")
-                },
+        InteractionTarget { slots },
+    ));
+
+    // --- Station 3: Multi-slot (Terminal) ---
+    let slots = vec![
+        InteractionSlot { priority: 1.1, ..InteractionSlot::instant("hack", "Hack") },
+        InteractionSlot { priority: 0.5, ..InteractionSlot::instant("read", "Read") },
+    ];
+    let terminal = common::spawn_prop(
+        &mut commands, &mut meshes, &mut materials,
+        "Terminal", common::PropShape::Cube(Vec3::new(0.8, 1.4, 0.4)),
+        Vec3::new(2.0, 0.7, 0.0), Color::srgb(0.15, 0.35, 0.65),
+    );
+    commands.entity(terminal).insert((
+        DemoBaseTargetSlots(slots.clone()),
+        Interactable::default(),
+        InteractionTarget { slots },
+    ));
+
+    // --- Station 4: Sequence (Lever) ---
+    let slots = vec![InteractionSlot {
+        behavior: InteractionBehavior::Sequence {
+            stages: vec![
+                InteractionStage { id: "prime".into(), execution: InteractionExecution::Instant, prompt: Some(InteractionPrompt { action_label_key: "Prime".into(), ..default() }) },
+                InteractionStage { id: "pull".into(), execution: InteractionExecution::Instant, prompt: Some(InteractionPrompt { action_label_key: "Pull".into(), ..default() }) },
+                InteractionStage { id: "reset".into(), execution: InteractionExecution::Instant, prompt: Some(InteractionPrompt { action_label_key: "Reset".into(), ..default() }) },
             ],
+            advance_mode: SequenceAdvanceMode::Loop,
         },
+        ..InteractionSlot::instant("lever", "Prime")
+    }];
+    let lever = common::spawn_prop(
+        &mut commands, &mut meshes, &mut materials,
+        "Lever", common::PropShape::Cylinder { radius: 0.15, height: 1.6 },
+        Vec3::new(7.0, 0.8, 0.0), Color::srgb(0.5, 0.5, 0.55),
     );
-    spawn_target(
-        &mut commands,
-        GATED_DOOR_NAME,
-        LabTargetKind::GatedDoor,
-        GATED_DOOR_POSITION,
-        Color::srgb(0.70, 0.30, 0.32),
-        Interactable {
-            priority: 0.3,
+    commands.entity(lever).insert((
+        DemoBaseTargetSlots(slots.clone()),
+        Interactable::default(),
+        InteractionTarget { slots },
+    ));
+
+    // --- Station 5: Gated (Generator + Door) ---
+    let gen_slots = vec![InteractionSlot::instant("activate", "Activate Generator")];
+    let generator = common::spawn_prop(
+        &mut commands, &mut meshes, &mut materials,
+        "Generator", common::PropShape::Sphere(0.6),
+        Vec3::new(-7.0, 0.6, -10.0), Color::srgb(0.8, 0.45, 0.1),
+    );
+    commands.entity(generator).insert((
+        DemoBaseTargetSlots(gen_slots.clone()),
+        Interactable::default(),
+        InteractionTarget { slots: gen_slots },
+    ));
+
+    let door_slots = vec![InteractionSlot {
+        availability: InteractionAvailabilityConfig {
+            required_actor_tags: vec![InteractionTag::from("powered")],
             ..default()
         },
-        InteractionTarget {
-            slots: vec![InteractionSlot {
-                availability: InteractionAvailabilityConfig {
-                    required_actor_tags: vec![InteractionTag::from("powered")],
-                    ..default()
-                },
-                ..InteractionSlot::instant("unlock_door", "Unlock Door")
-            }],
-        },
+        ..InteractionSlot::instant("unlock", "Unlock Door")
+    }];
+    let door = common::spawn_prop(
+        &mut commands, &mut meshes, &mut materials,
+        "Sealed Door", common::PropShape::Cube(Vec3::new(2.0, 2.5, 0.3)),
+        Vec3::new(-3.0, 1.25, -10.0), Color::srgb(0.4, 0.12, 0.12),
     );
+    commands.entity(door).insert((
+        DemoBaseTargetSlots(door_slots.clone()),
+        Interactable::default(),
+        InteractionTarget { slots: door_slots },
+    ));
+
+    // --- Station 6: Vehicle (Cockpit + Exit) ---
+    // Vehicle body
     commands.spawn((
         Name::new("Rover Body"),
-        Sprite::from_color(Color::srgb(0.22, 0.25, 0.31), Vec2::new(250.0, 176.0)),
-        Transform::from_translation(ROVER_BODY_POSITION),
-        GlobalTransform::from_translation(ROVER_BODY_POSITION),
+        Mesh3d(meshes.add(Cuboid::new(2.5, 1.5, 5.0))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.3, 0.4, 0.55),
+            perceptual_roughness: 0.5,
+            ..default()
+        })),
+        Transform::from_translation(Vec3::new(5.0, 0.75, -10.0)),
     ));
-    commands.spawn((
-        Name::new("Rover Canopy"),
-        Sprite::from_color(Color::srgba(0.34, 0.76, 0.96, 0.18), Vec2::new(168.0, 58.0)),
-        Transform::from_xyz(ROVER_BODY_POSITION.x, ROVER_BODY_POSITION.y + 58.0, 1.5),
-        GlobalTransform::from_translation(Vec3::new(
-            ROVER_BODY_POSITION.x,
-            ROVER_BODY_POSITION.y + 58.0,
-            1.5,
-        )),
-    ));
-    spawn_target(
-        &mut commands,
-        VEHICLE_COCKPIT_NAME,
-        LabTargetKind::VehicleCockpit,
-        VEHICLE_COCKPIT_POSITION,
-        Color::srgb(0.32, 0.62, 0.92),
-        Interactable::default(),
-        InteractionTarget {
-            slots: vec![InteractionSlot {
-                availability: InteractionAvailabilityConfig {
-                    blocked_actor_tags: vec![InteractionTag::from("seated")],
-                    ..default()
-                },
-                reservation: InteractionReservationPolicy::Exclusive,
-                ..InteractionSlot::instant("enter_vehicle", "Enter Rover")
-            }],
-        },
-    );
-    spawn_target(
-        &mut commands,
-        VEHICLE_EXIT_NAME,
-        LabTargetKind::VehicleExitHatch,
-        VEHICLE_EXIT_HATCH_POSITION,
-        Color::srgb(0.70, 0.76, 0.84),
-        Interactable::default(),
-        InteractionTarget {
-            slots: vec![InteractionSlot {
-                availability: InteractionAvailabilityConfig {
-                    required_actor_tags: vec![InteractionTag::from("seated")],
-                    ..default()
-                },
-                reservation: InteractionReservationPolicy::Exclusive,
-                ..InteractionSlot::instant("exit_vehicle", "Exit Rover")
-            }],
-        },
-    );
 
+    let enter_slots = vec![InteractionSlot {
+        availability: InteractionAvailabilityConfig {
+            blocked_actor_tags: vec![InteractionTag::from("seated")],
+            ..default()
+        },
+        reservation: InteractionReservationPolicy::Exclusive,
+        ..InteractionSlot::instant("enter_vehicle", "Enter Rover")
+    }];
+    let cockpit = common::spawn_prop(
+        &mut commands, &mut meshes, &mut materials,
+        "Rover Cockpit", common::PropShape::Cube(Vec3::splat(0.5)),
+        Vec3::new(5.0, 0.5, -8.0), Color::srgb(0.2, 0.6, 0.3),
+    );
+    commands.entity(cockpit).insert((
+        DemoBaseTargetSlots(enter_slots.clone()),
+        Interactable::default(),
+        InteractionTarget { slots: enter_slots },
+    ));
+
+    let exit_slots = vec![InteractionSlot {
+        availability: InteractionAvailabilityConfig {
+            required_actor_tags: vec![InteractionTag::from("seated")],
+            ..default()
+        },
+        reservation: InteractionReservationPolicy::Exclusive,
+        ..InteractionSlot::instant("exit_vehicle", "Exit Rover")
+    }];
+    let hatch = common::spawn_prop(
+        &mut commands, &mut meshes, &mut materials,
+        "Exit Hatch", common::PropShape::Cube(Vec3::splat(0.5)),
+        Vec3::new(5.0, 0.5, -12.0), Color::srgb(0.7, 0.3, 0.2),
+    );
+    commands.entity(hatch).insert((
+        DemoBaseTargetSlots(exit_slots.clone()),
+        Interactable::default(),
+        InteractionTarget { slots: exit_slots },
+    ));
+
+    // Lab overlay (detailed diagnostics)
     commands.spawn((
         Name::new("Lab Overlay"),
         LabOverlay,
         Text::new(String::new()),
         Node {
             position_type: PositionType::Absolute,
-            left: px(18.0),
-            top: px(16.0),
-            width: px(450.0),
+            right: Val::Px(16.0),
+            top: Val::Px(16.0),
+            max_width: Val::Px(420.0),
             ..default()
         },
-        TextFont {
-            font_size: 17.0,
-            ..default()
-        },
-        TextColor(Color::WHITE),
+        TextFont { font_size: 13.0, ..default() },
+        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
     ));
 }
 
-fn spawn_zone(commands: &mut Commands, name: &str, position: Vec3, size: Vec2, color: Color) {
-    commands.spawn((
-        Name::new(name.to_owned()),
-        Sprite {
-            color,
-            custom_size: Some(size),
-            ..default()
-        },
-        Transform::from_translation(position),
-        GlobalTransform::from_translation(position),
-    ));
-}
+// ---------------------------------------------------------------------------
+// Station teleport
+// ---------------------------------------------------------------------------
 
-fn spawn_target(
-    commands: &mut Commands,
-    name: &str,
-    kind: LabTargetKind,
-    position: Vec3,
-    color: Color,
-    interactable: Interactable,
-    target: InteractionTarget,
+fn on_station<A: InputAction<Output = bool>, const S: u8>(
+    _trigger: On<Start<A>>,
+    mut players: Query<(&mut Transform, &mut DemoPlayerController, &mut Interactor), With<DemoPlayer>>,
 ) {
-    commands.spawn((
-        Name::new(name.to_owned()),
-        kind,
-        LabTargetVisual,
-        DemoBaseTargetSlots(target.slots.clone()),
-        interactable,
-        target,
-        Sprite {
-            color,
-            custom_size: Some(TARGET_SIZE),
-            ..default()
-        },
-        Transform::from_translation(position),
-        GlobalTransform::from_translation(position),
-    ));
-}
-
-fn on_interact_start(
-    trigger: On<Start<InteractAction>>,
-    mut intents: MessageWriter<InteractionIntent>,
-) {
-    intents.write(InteractionIntent {
-        interactor: trigger.context,
-        kind: InteractionIntentKind::Press,
-    });
-}
-
-fn on_interact_release(
-    trigger: On<Complete<InteractAction>>,
-    mut intents: MessageWriter<InteractionIntent>,
-) {
-    intents.write(InteractionIntent {
-        interactor: trigger.context,
-        kind: InteractionIntentKind::Release,
-    });
-}
-
-fn on_interact_cancel(
-    trigger: On<InputCancel<InteractAction>>,
-    mut intents: MessageWriter<InteractionIntent>,
-) {
-    intents.write(InteractionIntent {
-        interactor: trigger.context,
-        kind: InteractionIntentKind::Cancel,
-    });
-}
-
-fn on_explicit_cancel(
-    trigger: On<Start<CancelAction>>,
-    mut intents: MessageWriter<InteractionIntent>,
-) {
-    intents.write(InteractionIntent {
-        interactor: trigger.context,
-        kind: InteractionIntentKind::Cancel,
-    });
-}
-
-fn on_next_slot(trigger: On<Start<NextSlotAction>>, mut intents: MessageWriter<InteractionIntent>) {
-    intents.write(InteractionIntent {
-        interactor: trigger.context,
-        kind: InteractionIntentKind::CycleNext,
-    });
-}
-
-fn on_prev_slot(trigger: On<Start<PrevSlotAction>>, mut intents: MessageWriter<InteractionIntent>) {
-    intents.write(InteractionIntent {
-        interactor: trigger.context,
-        kind: InteractionIntentKind::CyclePrevious,
-    });
-}
-
-fn on_priority_station(
-    trigger: On<Start<PriorityStationAction>>,
-    mut commands: Commands,
-    interactors: Query<&Interactor, With<LabInteractor>>,
-) {
-    queue_station_change(
-        &mut commands,
-        &interactors,
-        trigger.context,
-        LabStation::Priority,
-    );
-}
-
-fn on_hold_station(
-    trigger: On<Start<HoldStationAction>>,
-    mut commands: Commands,
-    interactors: Query<&Interactor, With<LabInteractor>>,
-) {
-    queue_station_change(
-        &mut commands,
-        &interactors,
-        trigger.context,
-        LabStation::Hold,
-    );
-}
-
-fn on_multi_station(
-    trigger: On<Start<MultiStationAction>>,
-    mut commands: Commands,
-    interactors: Query<&Interactor, With<LabInteractor>>,
-) {
-    queue_station_change(
-        &mut commands,
-        &interactors,
-        trigger.context,
-        LabStation::Multi,
-    );
-}
-
-fn on_gated_station(
-    trigger: On<Start<GatedStationAction>>,
-    mut commands: Commands,
-    interactors: Query<&Interactor, With<LabInteractor>>,
-) {
-    queue_station_change(
-        &mut commands,
-        &interactors,
-        trigger.context,
-        LabStation::Gated,
-    );
-}
-
-fn on_vehicle_station(
-    trigger: On<Start<VehicleStationAction>>,
-    mut commands: Commands,
-    interactors: Query<&Interactor, With<LabInteractor>>,
-) {
-    queue_station_change(
-        &mut commands,
-        &interactors,
-        trigger.context,
-        LabStation::Vehicle,
-    );
-}
-
-fn queue_station_change(
-    commands: &mut Commands,
-    interactors: &Query<&Interactor, With<LabInteractor>>,
-    interactor_entity: Entity,
-    station: LabStation,
-) {
-    let Ok(interactor_config) = interactors.get(interactor_entity) else {
+    let station = match S {
+        0 => LabStation::Instant,
+        1 => LabStation::Hold,
+        2 => LabStation::Multi,
+        3 => LabStation::Sequence,
+        4 => LabStation::Gated,
+        5 => LabStation::Vehicle,
+        _ => return,
+    };
+    let profile = station_profile(station);
+    let Ok((mut transform, mut ctrl, mut interactor)) = players.single_mut() else {
         return;
     };
-    let interactor_config = interactor_config.clone();
-    let (position, aim, range) = station_profile(station);
-    commands.entity(interactor_entity).insert((
-        Transform::from_translation(position),
-        GlobalTransform::from_translation(position),
-        InteractorAim { direction: aim },
-        Interactor {
-            max_distance: Some(range),
-            proximity_radius: Some(range),
-            ..interactor_config
-        },
-    ));
+    transform.translation = profile.player_pos;
+    let dir = (profile.look_at - profile.player_pos).normalize_or_zero();
+    ctrl.yaw = dir.x.atan2(dir.z);
+    ctrl.pitch = 0.0;
+    interactor.max_distance = Some(profile.range);
+    interactor.proximity_radius = Some(profile.range);
 }
 
-fn on_toggle_powered(
-    trigger: On<Start<TogglePoweredAction>>,
+fn on_toggle_power(
+    _trigger: On<Start<TogglePowerAction>>,
     mut commands: Commands,
-    tags_query: Query<&InteractionTags, With<LabInteractor>>,
+    players: Query<(Entity, &InteractionTags), With<DemoPlayer>>,
 ) {
-    let Ok(existing) = tags_query.get(trigger.context) else {
-        return;
-    };
-    let existing = existing.clone();
+    let Ok((entity, tags)) = players.single() else { return; };
     let powered = InteractionTag::from("powered");
-    let mut next = existing;
-    if next.contains(&powered) {
-        next.tags.retain(|tag| tag != &powered);
+    let mut new_tags = tags.clone();
+    if new_tags.contains(&powered) {
+        new_tags.tags.retain(|t| t != &powered);
     } else {
-        next.tags.push(powered);
+        new_tags.tags.push(powered);
     }
-    commands.entity(trigger.context).insert(next);
+    commands.entity(entity).insert(new_tags);
 }
 
-fn on_toggle_accessibility(
-    _trigger: On<Start<ToggleAccessibilityAction>>,
-    mut config: ResMut<InteractionConfig>,
-) {
-    config.hold_to_toggle = !config.hold_to_toggle;
-}
+// ---------------------------------------------------------------------------
+// Diagnostics tracking
+// ---------------------------------------------------------------------------
 
-fn tint_targets(
-    active: Query<&ActiveInteraction, With<LabInteractor>>,
-    mut targets: Query<
-        (
-            Entity,
-            &LabTargetKind,
-            &mut Sprite,
-            Option<&InteractionFocusedBy>,
-        ),
-        With<LabTargetVisual>,
+fn update_diagnostics(
+    mut diag: ResMut<LabDiagnostics>,
+    config: Res<InteractionConfig>,
+    interactors: Query<
+        (&FocusedInteraction, &InteractionPromptState, Option<&ActiveInteraction>, &InteractionTags),
+        With<DemoPlayer>,
     >,
+    names: Query<&Name>,
 ) {
-    let active_state = active
-        .iter()
-        .next()
-        .map(|entry| (entry.target, entry.progress));
-
-    for (entity, kind, mut sprite, focused_by) in &mut targets {
-        let mut color = base_target_color(*kind);
-        if let Some((active_target, progress)) = active_state
-            && active_target == entity
-        {
-            color = if progress >= 1.0 {
-                Color::srgb(0.22, 0.86, 0.54)
-            } else if progress >= 0.5 {
-                Color::srgb(0.95, 0.72, 0.26)
-            } else {
-                Color::srgb(0.90, 0.56, 0.24)
-            };
+    if let Some((focus, prompt_state, active, tags)) = interactors.iter().next() {
+        diag.focused_target_name = focus.target.and_then(|e| names.get(e).ok()).map(|n| n.to_string());
+        diag.focused_slot = focus.slot_id.as_ref().map(|s| s.0.clone());
+        if let Some(offer) = &prompt_state.offer {
+            diag.prompt_label = Some(offer.prompt.action_label_key.clone());
+            diag.availability = offer.availability.as_ref().map(|r| format!("{r:?}"));
+        } else {
+            diag.prompt_label = None;
+            diag.availability = None;
         }
-        if focused_by.is_some_and(|focus| !focus.interactors.is_empty()) {
-            color = Color::srgb(0.98, 0.82, 0.24);
+        if let Some(a) = active {
+            diag.active_slot = Some(a.slot_id.0.clone());
+            diag.active_progress = a.progress;
+        } else {
+            diag.active_slot = None;
+            diag.active_progress = 0.0;
         }
-        sprite.color = color;
+        diag.actor_powered = tags.contains(&InteractionTag::from("powered"));
+        diag.actor_seated = tags.contains(&InteractionTag::from("seated"));
     }
+    diag.hold_to_toggle = config.hold_to_toggle;
 }
 
-fn base_target_color(kind: LabTargetKind) -> Color {
-    match kind {
-        LabTargetKind::NearbyCrate => Color::srgb(0.44, 0.49, 0.56),
-        LabTargetKind::PriorityRelay => Color::srgb(0.24, 0.55, 0.96),
-        LabTargetKind::HoldConsole => Color::srgb(0.86, 0.54, 0.24),
-        LabTargetKind::MultiPanel => Color::srgb(0.40, 0.68, 0.42),
-        LabTargetKind::GatedDoor => Color::srgb(0.70, 0.30, 0.32),
-        LabTargetKind::VehicleCockpit => Color::srgb(0.32, 0.62, 0.92),
-        LabTargetKind::VehicleExitHatch => Color::srgb(0.70, 0.76, 0.84),
-    }
-}
-
-fn record_prompt_messages(
-    mut diagnostics: ResMut<LabDiagnostics>,
-    mut reader: MessageReader<InteractionOffered>,
-) {
+fn record_completed(mut diag: ResMut<LabDiagnostics>, mut reader: MessageReader<InteractionCompleted>) {
     for event in reader.read() {
-        diagnostics.last_prompt_summary = event.offer.as_ref().map(|offer| {
-            let availability = offer
-                .availability
-                .as_ref()
-                .map(format_availability)
-                .unwrap_or_else(|| "available".to_owned());
-            format!("{} [{availability}]", offer.prompt.action_label_key)
-        });
+        diag.completed_count += 1;
+        diag.last_completed_slot = Some(event.slot_id.0.clone());
     }
 }
 
-fn record_completed_messages(
-    mut diagnostics: ResMut<LabDiagnostics>,
-    mut reader: MessageReader<InteractionCompleted>,
-) {
+fn record_canceled(mut diag: ResMut<LabDiagnostics>, mut reader: MessageReader<InteractionCanceled>) {
     for event in reader.read() {
-        diagnostics.completed_count += 1;
-        diagnostics.last_completed_slot = Some(event.slot_id.0.clone());
+        diag.canceled_count += 1;
+        diag.last_canceled_reason = Some(format!("{:?}", event.reason));
     }
 }
 
-fn record_canceled_messages(
-    mut diagnostics: ResMut<LabDiagnostics>,
-    mut reader: MessageReader<InteractionCanceled>,
-) {
+fn record_failed(mut diag: ResMut<LabDiagnostics>, mut reader: MessageReader<InteractionFailed>) {
     for event in reader.read() {
-        diagnostics.canceled_count += 1;
-        diagnostics.last_canceled_reason = Some(format_cancel_reason(&event.reason));
+        diag.failed_count += 1;
+        diag.last_failed_reason = Some(format!("{:?}", event.reason));
     }
 }
 
-fn record_failed_messages(
-    mut diagnostics: ResMut<LabDiagnostics>,
-    mut reader: MessageReader<InteractionFailed>,
-) {
+fn record_stage_advanced(mut diag: ResMut<LabDiagnostics>, mut reader: MessageReader<InteractionStageAdvanced>) {
     for event in reader.read() {
-        diagnostics.failed_count += 1;
-        diagnostics.last_failed_reason = Some(format_availability(&event.reason));
+        diag.stage_advanced_count += 1;
+        let prev = event.previous_stage_id.as_ref().map(|s| s.0.as_str()).unwrap_or("start");
+        let next = event.next_stage_id.as_ref().map(|s| s.0.as_str()).unwrap_or("end");
+        diag.last_stage_transition = Some(format!("{prev} → {next}"));
     }
 }
 
-fn record_stage_messages(
-    mut diagnostics: ResMut<LabDiagnostics>,
-    mut reader: MessageReader<InteractionStageAdvanced>,
-) {
-    for event in reader.read() {
-        diagnostics.stage_advanced_count += 1;
-        diagnostics.last_stage_transition = Some(format!(
-            "{} -> {}",
-            event
-                .previous_stage_id
-                .as_ref()
-                .map(|id| id.0.as_str())
-                .unwrap_or("start"),
-            event
-                .next_stage_id
-                .as_ref()
-                .map(|id| id.0.as_str())
-                .unwrap_or("terminal")
-        ));
-    }
-}
+// ---------------------------------------------------------------------------
+// Gameplay handlers
+// ---------------------------------------------------------------------------
 
-fn record_progress_messages(
-    mut diagnostics: ResMut<LabDiagnostics>,
-    mut reader: MessageReader<InteractionProgress>,
-) {
-    for event in reader.read() {
-        diagnostics.active_slot = Some(event.slot_id.0.clone());
-        diagnostics.active_progress = event.progress;
-    }
-}
-
-fn handle_vehicle_completions(
+fn handle_generator(
     mut commands: Commands,
     mut reader: MessageReader<InteractionCompleted>,
-    interactor_tags: Query<&InteractionTags, With<LabInteractor>>,
+    players: Query<&InteractionTags, With<DemoPlayer>>,
 ) {
     for event in reader.read() {
-        let Ok(existing_tags) = interactor_tags.get(event.interactor) else {
-            continue;
-        };
+        if event.slot_id.0 != "activate" { continue; }
+        let Ok(tags) = players.get(event.interactor) else { continue; };
+        let mut new_tags = tags.clone();
+        let powered = InteractionTag::from("powered");
+        if !new_tags.contains(&powered) {
+            new_tags.tags.push(powered);
+        }
+        commands.entity(event.interactor).insert(new_tags);
+    }
+}
 
-        let mut next_tags = existing_tags.clone();
+fn handle_vehicle(
+    mut commands: Commands,
+    mut reader: MessageReader<InteractionCompleted>,
+    mut players: Query<(&mut Transform, &mut DemoPlayerController, &InteractionTags), With<DemoPlayer>>,
+) {
+    for event in reader.read() {
+        let Ok((mut transform, mut ctrl, tags)) = players.get_mut(event.interactor) else { continue; };
         let seated = InteractionTag::from("seated");
-
         match event.slot_id.0.as_str() {
             "enter_vehicle" => {
-                if !next_tags.contains(&seated) {
-                    next_tags.tags.push(seated);
-                }
-                commands.entity(event.interactor).insert((
-                    next_tags,
-                    Transform::from_translation(VEHICLE_SEATED_POSITION),
-                    GlobalTransform::from_translation(VEHICLE_SEATED_POSITION),
-                    InteractorAim {
-                        direction: (VEHICLE_EXIT_HATCH_POSITION - VEHICLE_SEATED_POSITION)
-                            .normalize_or_zero(),
-                    },
-                ));
+                let mut new_tags = tags.clone();
+                new_tags.tags.push(seated);
+                commands.entity(event.interactor).insert(new_tags);
+                transform.translation = Vec3::new(5.0, 1.6, -10.0);
+                ctrl.yaw = std::f32::consts::PI;
+                ctrl.pitch = 0.0;
             }
             "exit_vehicle" => {
-                next_tags.tags.retain(|tag| tag != &seated);
-                let (position, aim, _) = station_profile(LabStation::Vehicle);
-                commands.entity(event.interactor).insert((
-                    next_tags,
-                    Transform::from_translation(position),
-                    GlobalTransform::from_translation(position),
-                    InteractorAim { direction: aim },
-                ));
+                let mut new_tags = tags.clone();
+                new_tags.tags.retain(|t| t != &seated);
+                commands.entity(event.interactor).insert(new_tags);
+                transform.translation = station_profile(LabStation::Vehicle).player_pos;
+                ctrl.yaw = 0.0;
+                ctrl.pitch = 0.0;
             }
             _ => {}
         }
     }
 }
 
-fn update_diagnostics(
-    config: Res<InteractionConfig>,
-    names: Query<&Name>,
-    interactor_tags: Query<&InteractionTags, With<LabInteractor>>,
-    focused: Query<&FocusedInteraction, With<LabInteractor>>,
-    prompt: Query<&saddle_interaction::InteractionPromptState, With<LabInteractor>>,
-    active: Query<&ActiveInteraction, With<LabInteractor>>,
-    mut diagnostics: ResMut<LabDiagnostics>,
-) {
-    let focused = focused.iter().next().cloned().unwrap_or_default();
-    let prompt = prompt
-        .iter()
-        .next()
-        .and_then(|state| state.offer.as_ref().cloned());
-    let active = active.iter().next().cloned();
+// ---------------------------------------------------------------------------
+// Overlay
+// ---------------------------------------------------------------------------
 
-    diagnostics.focused_target_name = focused
-        .target
-        .and_then(|entity| names.get(entity).ok().map(|name| name.as_str().to_owned()));
-    diagnostics.focused_slot = focused.slot_id.as_ref().map(|slot| slot.0.clone());
-    diagnostics.prompt_label = prompt
-        .as_ref()
-        .map(|offer| offer.prompt.action_label_key.clone());
-    diagnostics.availability = prompt
-        .as_ref()
-        .and_then(|offer| offer.availability.as_ref().map(format_availability));
-    diagnostics.active_slot = active.as_ref().map(|entry| entry.slot_id.0.clone());
-    diagnostics.active_progress = active.as_ref().map_or(0.0, |entry| entry.progress);
-    diagnostics.actor_powered = interactor_tags
-        .iter()
-        .next()
-        .is_some_and(|tags| tags.contains(&InteractionTag::from("powered")));
-    diagnostics.actor_seated = interactor_tags
-        .iter()
-        .next()
-        .is_some_and(|tags| tags.contains(&InteractionTag::from("seated")));
-    diagnostics.hold_to_toggle = config.hold_to_toggle;
-}
-
-fn update_overlay(
-    diagnostics: Res<LabDiagnostics>,
-    mut overlay: Single<&mut Text, With<LabOverlay>>,
+fn update_lab_overlay(
+    diag: Res<LabDiagnostics>,
+    mut overlay: Query<&mut Text, With<LabOverlay>>,
 ) {
-    overlay.0 = format!(
-        "interaction lab\n\
-         stations: arbitration | hold | multi-slot | gated | vehicle bay\n\
-         controls: 1-5 jump stations | E confirm | Esc cancel | Tab/Q cycle | P power | T accessibility\n\
-         focus: {}\n\
-         slot: {}\n\
-         prompt: {}\n\
-         availability: {}\n\
-         active: {} ({:.0}%)\n\
-         last offered: {}\n\
-         last completed: {}\n\
-         last canceled: {}\n\
-         last failed: {}\n\
-         stage: {}\n\
-         powered tag: {}\n\
-         seated tag: {}\n\
-         hold_to_toggle: {}\n\
-         completed: {} canceled: {} failed: {} stage advances: {}",
-        diagnostics.focused_target_name.as_deref().unwrap_or("none"),
-        diagnostics.focused_slot.as_deref().unwrap_or("none"),
-        diagnostics.prompt_label.as_deref().unwrap_or("none"),
-        diagnostics.availability.as_deref().unwrap_or("available"),
-        diagnostics.active_slot.as_deref().unwrap_or("none"),
-        diagnostics.active_progress * 100.0,
-        diagnostics.last_prompt_summary.as_deref().unwrap_or("none"),
-        diagnostics.last_completed_slot.as_deref().unwrap_or("none"),
-        diagnostics
-            .last_canceled_reason
-            .as_deref()
-            .unwrap_or("none"),
-        diagnostics.last_failed_reason.as_deref().unwrap_or("none"),
-        diagnostics
-            .last_stage_transition
-            .as_deref()
-            .unwrap_or("none"),
-        diagnostics.actor_powered,
-        diagnostics.actor_seated,
-        diagnostics.hold_to_toggle,
-        diagnostics.completed_count,
-        diagnostics.canceled_count,
-        diagnostics.failed_count,
-        diagnostics.stage_advanced_count,
+    let Ok(mut text) = overlay.single_mut() else { return; };
+
+    let focus = diag.focused_target_name.as_deref().unwrap_or("none");
+    let prompt = diag.prompt_label.as_deref().unwrap_or("none");
+    let avail = diag.availability.as_deref().unwrap_or("available");
+    let active = diag.active_slot.as_deref().unwrap_or("none");
+    let last_comp = diag.last_completed_slot.as_deref().unwrap_or("-");
+    let last_cancel = diag.last_canceled_reason.as_deref().unwrap_or("-");
+    let last_stage = diag.last_stage_transition.as_deref().unwrap_or("-");
+
+    let tags = [
+        if diag.actor_powered { "powered" } else { "" },
+        if diag.actor_seated { "seated" } else { "" },
+    ]
+    .iter()
+    .filter(|s| !s.is_empty())
+    .copied()
+    .collect::<Vec<_>>()
+    .join(", ");
+    let tags = if tags.is_empty() { "none".to_owned() } else { tags };
+
+    **text = format!(
+        "INTERACTION LAB\n\
+         1-6: teleport  P: toggle power  WASD: move  E: interact\n\
+         Tab/Q: cycle  Esc: cancel\n\n\
+         focus: {focus}\n\
+         prompt: {prompt}  [{avail}]\n\
+         active: {active}  progress: {:.0}%\n\
+         tags: {tags}\n\n\
+         completed: {}  canceled: {}  failed: {}\n\
+         stages: {}\n\
+         last completed: {last_comp}\n\
+         last canceled: {last_cancel}\n\
+         last stage: {last_stage}",
+        diag.active_progress * 100.0,
+        diag.completed_count,
+        diag.canceled_count,
+        diag.failed_count,
+        diag.stage_advanced_count,
     );
 }
 
-fn format_availability(reason: &InteractionAvailabilityReason) -> String {
-    match reason {
-        InteractionAvailabilityReason::Disabled => "disabled".to_owned(),
-        InteractionAvailabilityReason::Busy => "busy".to_owned(),
-        InteractionAvailabilityReason::ReservedByOther => "reserved".to_owned(),
-        InteractionAvailabilityReason::Consumed => "consumed".to_owned(),
-        InteractionAvailabilityReason::MissingActorTag(tag) => {
-            format!("missing_actor_tag:{}", tag.0)
-        }
-        InteractionAvailabilityReason::BlockedActorTag(tag) => {
-            format!("blocked_actor_tag:{}", tag.0)
-        }
-        InteractionAvailabilityReason::MissingTargetTag(tag) => {
-            format!("missing_target_tag:{}", tag.0)
-        }
-        InteractionAvailabilityReason::BlockedTargetTag(tag) => {
-            format!("blocked_target_tag:{}", tag.0)
-        }
-        InteractionAvailabilityReason::SharedCooldown { .. } => "shared_cooldown".to_owned(),
-        InteractionAvailabilityReason::PerActorCooldown { .. } => "per_actor_cooldown".to_owned(),
-        InteractionAvailabilityReason::PredicateFailed { predicate, .. } => {
-            format!("predicate_failed:{}", predicate.0)
-        }
-        InteractionAvailabilityReason::OutOfRange => "out_of_range".to_owned(),
-        InteractionAvailabilityReason::LineOfSightBlocked => "line_of_sight_blocked".to_owned(),
-        InteractionAvailabilityReason::MissingTarget => "missing_target".to_owned(),
-        InteractionAvailabilityReason::NoSlots => "no_slots".to_owned(),
-    }
-}
-
-fn format_cancel_reason(reason: &saddle_interaction::InteractionCancelReason) -> String {
-    match reason {
-        saddle_interaction::InteractionCancelReason::ExplicitCancel => "explicit_cancel".to_owned(),
-        saddle_interaction::InteractionCancelReason::InputReleased => "input_released".to_owned(),
-        saddle_interaction::InteractionCancelReason::FocusLost => "focus_lost".to_owned(),
-        saddle_interaction::InteractionCancelReason::DistanceBreak => "distance_break".to_owned(),
-        saddle_interaction::InteractionCancelReason::LineOfSightBreak => {
-            "line_of_sight_break".to_owned()
-        }
-        saddle_interaction::InteractionCancelReason::Busy => "busy".to_owned(),
-        saddle_interaction::InteractionCancelReason::TargetMissing => "target_missing".to_owned(),
-        saddle_interaction::InteractionCancelReason::ReservationLost => {
-            "reservation_lost".to_owned()
-        }
-        saddle_interaction::InteractionCancelReason::PredicateInvalidated { predicate, .. } => {
-            format!("predicate_invalidated:{}", predicate.0)
-        }
-        saddle_interaction::InteractionCancelReason::Other(detail) => format!("other:{detail}"),
-    }
-}
-
-fn station_profile(station: LabStation) -> (Vec3, Vec3, f32) {
-    match station {
-        LabStation::Priority => (
-            PRIORITY_STATION_POSITION,
-            (PRIORITY_RELAY_POSITION - PRIORITY_STATION_POSITION).normalize_or_zero(),
-            PRIORITY_STATION_RANGE,
-        ),
-        LabStation::Hold => (
-            HOLD_STATION_POSITION,
-            (HOLD_CONSOLE_POSITION - HOLD_STATION_POSITION).normalize_or_zero(),
-            HOLD_STATION_RANGE,
-        ),
-        LabStation::Multi => (
-            MULTI_STATION_POSITION,
-            (MULTI_PANEL_POSITION - MULTI_STATION_POSITION).normalize_or_zero(),
-            SYSTEM_STATION_RANGE,
-        ),
-        LabStation::Gated => (
-            GATED_STATION_POSITION,
-            (GATED_DOOR_POSITION - GATED_STATION_POSITION).normalize_or_zero(),
-            SYSTEM_STATION_RANGE,
-        ),
-        LabStation::Vehicle => (
-            VEHICLE_STATION_POSITION,
-            (VEHICLE_COCKPIT_POSITION - VEHICLE_STATION_POSITION).normalize_or_zero(),
-            VEHICLE_STATION_RANGE,
-        ),
-    }
-}
-
-fn interactor_entity(world: &mut World) -> Entity {
-    world
-        .query_filtered::<Entity, With<LabInteractor>>()
-        .single(world)
-        .expect("lab interactor should exist")
-}
+// ---------------------------------------------------------------------------
+// Public helpers for E2E scenarios
+// ---------------------------------------------------------------------------
 
 pub fn go_to_station(world: &mut World, station: LabStation) {
-    let interactor = interactor_entity(world);
-    let (position, aim, range) = station_profile(station);
-    let interactor_config = world
-        .get::<Interactor>(interactor)
-        .cloned()
-        .expect("lab interactor should have an Interactor component");
-    world.entity_mut(interactor).insert((
-        Transform::from_translation(position),
-        GlobalTransform::from_translation(position),
-        InteractorAim { direction: aim },
-        Interactor {
-            max_distance: Some(range),
-            proximity_radius: Some(range),
-            ..interactor_config
-        },
-    ));
+    let profile = station_profile(station);
+    let mut players = world.query_filtered::<(Entity, &mut Transform, &mut DemoPlayerController, &mut Interactor), With<DemoPlayer>>();
+    let Ok((_entity, mut transform, mut ctrl, mut interactor)) = players.single_mut(world) else { return; };
+    transform.translation = profile.player_pos;
+    let dir = (profile.look_at - profile.player_pos).normalize_or_zero();
+    ctrl.yaw = dir.x.atan2(dir.z);
+    ctrl.pitch = 0.0;
+    interactor.max_distance = Some(profile.range);
+    interactor.proximity_radius = Some(profile.range);
 }
 
 pub fn send_intent(world: &mut World, kind: InteractionIntentKind) {
-    let interactor = interactor_entity(world);
-    world.write_message(InteractionIntent { interactor, kind });
+    let mut players = world.query_filtered::<Entity, With<DemoPlayer>>();
+    let Ok(entity) = players.single(world) else { return; };
+    world.write_message(InteractionIntent { interactor: entity, kind });
 }
 
 pub fn set_accessibility_toggle(world: &mut World, enabled: bool) {
@@ -1071,17 +641,13 @@ pub fn set_accessibility_toggle(world: &mut World, enabled: bool) {
 }
 
 pub fn set_actor_powered(world: &mut World, enabled: bool) {
-    let interactor = interactor_entity(world);
-    let mut tags = world
-        .get::<InteractionTags>(interactor)
-        .cloned()
-        .unwrap_or_default();
+    let mut players = world.query_filtered::<(Entity, &InteractionTags), With<DemoPlayer>>();
+    let Ok((entity, tags)) = players.single(world) else { return; };
     let powered = InteractionTag::from("powered");
-
-    tags.tags.retain(|tag| tag != &powered);
+    let mut new_tags = tags.clone();
+    new_tags.tags.retain(|t| t != &powered);
     if enabled {
-        tags.tags.push(powered);
+        new_tags.tags.push(powered);
     }
-
-    world.entity_mut(interactor).insert(tags);
+    world.entity_mut(entity).insert(new_tags);
 }

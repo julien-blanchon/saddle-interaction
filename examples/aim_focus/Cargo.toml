@@ -1,5 +1,5 @@
 [package]
-name = "saddle-interaction-example-accessibility"
+name = "saddle-interaction-example-aim-focus"
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -9,7 +9,6 @@ bevy = { workspace = true }
 bevy_enhanced_input = { workspace = true }
 saddle-interaction = { workspace = true }
 saddle-interaction-example-common = { path = "../common" }
-saddle-pane = { workspace = true }
 
 [lints]
 workspace = true

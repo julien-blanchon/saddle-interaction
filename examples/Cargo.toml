@@ -3,14 +3,15 @@ members = [
     "common",
     "basic",
     "hold",
-    "multi_action",
-    "chained",
+    "multi_slot",
+    "sequence",
     "gated",
-    "accessibility",
-    "prompt_ui",
-    "vehicle_bay",
-    "dialogue_terminal",
+    "vehicle",
+    "aim_focus",
     "lab",
+    "fps_interactive",
+    "pickup_prompt",
+    "vehicle_entry",
 ]
 resolver = "3"
 
@@ -21,9 +22,12 @@ bevy_enhanced_input = "0.24"
 bevy_input_focus = "0.18"
 bevy_ui_widgets = "0.18"
 saddle-interaction = { path = ".." }
-saddle-animation-text-animation = { git = "https://github.com/julien-blanchon/saddle-animation-text-animation" }
-saddle-animation-tween = { git = "https://github.com/julien-blanchon/saddle-animation-tween" }
 saddle-pane = { git = "https://github.com/julien-blanchon/saddle-pane" }
+# Cross-crate Tier 1 deps
+saddle-character-controller = { git = "https://github.com/julien-blanchon/saddle-character-controller" }
+saddle-physics-object-interaction = { git = "https://github.com/julien-blanchon/saddle-physics-object-interaction" }
+saddle-vehicle-ground-vehicle = { git = "https://github.com/julien-blanchon/saddle-vehicle-ground-vehicle" }
+avian3d = "0.6"
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"

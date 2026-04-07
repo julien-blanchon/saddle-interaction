@@ -1,5 +1,34 @@
 # saddle-interaction architecture
 
+## Pipeline Diagram
+
+```text
+InteractionIntent
+    |
+    v
++----------+   +----------+   +----------+   +-------+   +----------+   +-----------+
+|  Detect  |-->|  Score   |-->|  Focus   |-->|  Gate |-->| Execute  |-->| Feedback  |
+|          |   |          |   |          |   |       |   |          |   |           |
+| rebuild  |   | rank     |   | hyster-  |   | slot  |   | start/   |   | markers   |
+| spatial  |   | candi-   |   | esis     |   | avail |   | tick/    |   | messages  |
+| index    |   | dates    |   | focus    |   | check |   | cancel/  |   | prompts   |
+| collect  |   |          |   | lock     |   |       |   | finish   |   |           |
++----------+   +----------+   +----------+   +-------+   +----------+   +-----------+
+```
+
+## Message Flow (typical successful interaction)
+
+```text
+Frame N:   Player walks near target → Detect collects candidate
+Frame N+1: Score ranks it top → Focus locks on → Gate evaluates slot
+           → InteractionOffered emitted → FocusChanged emitted
+Frame N+2: Player presses E → InteractionIntent(Press) consumed
+           → Execute starts → InteractionStarted emitted
+Frame N+3..M: (Hold) Execute ticks → InteractionProgress emitted each frame
+Frame M:   Progress reaches 1.0 → InteractionCompleted emitted
+           → ActiveInteraction removed
+```
+
 ## Candidate Lifecycle
 
 The runtime follows one stable pipeline each update:

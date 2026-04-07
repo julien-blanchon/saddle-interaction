@@ -168,4 +168,66 @@ With Bevy's `Camera2d`, **one world unit equals one screen pixel**. Entity posit
 - Per-actor `Interactor::max_distance` and `Interactor::proximity_radius` need the same pixel-scale values.
 - The `saddle-pane` slider ranges should match (e.g., `min = 50.0, max = 800.0`).
 
-The built-in examples and lab already use pixel-space values. If interactions appear non-functional in your 2D scene, check that your detection ranges are in the same order of magnitude as the pixel distances between your interactor and targets.
+The standalone 3D examples use world-unit values (3–6). If interactions appear non-functional in your 2D scene, check that your detection ranges are in the same order of magnitude as the pixel distances between your interactor and targets.
+
+## Common Tuning Recipes
+
+### Forgiving prompts for couch play
+
+Larger detection radius and stickier focus reduce the precision needed to target objects — ideal for controller-based games played at a distance.
+
+```rust
+InteractionConfig {
+    detection_radius_scale: 1.5,
+    hysteresis: 0.25,
+    default_input_buffer_seconds: 0.2,
+    ..default()
+}
+```
+
+### Precise first-person interaction
+
+Higher alignment weight rewards looking directly at targets. Hybrid mode confirms with picking. Line of sight prevents interacting through walls.
+
+```rust
+Interactor {
+    detection_mode: Some(DetectionMode::Hybrid),
+    alignment_weight: 0.8,
+    picking_bias: 1.0,
+    require_line_of_sight: true,
+    ..default()
+}
+```
+
+### Accessibility-first configuration
+
+Hold-to-toggle converts hold slots into two taps (start, confirm). Mash-auto-complete converts mash slots into passive timed completions. Larger detection radius reduces movement precision requirements.
+
+```rust
+InteractionConfig {
+    hold_to_toggle: true,
+    mash_auto_complete: true,
+    detection_radius_scale: 1.3,
+    ..default()
+}
+```
+
+### 2D top-down game
+
+Scale all distances to pixel space. Disable alignment scoring (irrelevant in top-down) and increase proximity radius.
+
+```rust
+InteractionConfig {
+    default_max_distance: 300.0,
+    default_proximity_radius: 300.0,
+    ..default()
+}
+// Per-actor:
+Interactor {
+    max_distance: Some(300.0),
+    proximity_radius: Some(300.0),
+    alignment_weight: 0.0,
+    distance_weight: 1.0,
+    ..default()
+}
+```
