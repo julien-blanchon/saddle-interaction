@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use saddle_bevy_e2e::{action::Action, actions::assertions, scenario::Scenario};
-use saddle_interaction::InteractionIntentKind;
+use saddle_interaction::{Interactable, InteractionIntentKind, Interactor};
 
 use crate::{
     LabDiagnostics, LabStation, go_to_station, send_intent, set_accessibility_toggle,
@@ -10,6 +10,7 @@ use crate::{
 pub fn list_scenarios() -> Vec<&'static str> {
     vec![
         "smoke_launch",
+        "interaction_focus_priority",
         "interaction_instant",
         "interaction_hold_complete",
         "interaction_hold_cancel",
@@ -24,6 +25,7 @@ pub fn list_scenarios() -> Vec<&'static str> {
 pub fn scenario_by_name(name: &str) -> Option<Scenario> {
     match name {
         "smoke_launch" => Some(smoke_launch()),
+        "interaction_focus_priority" => Some(interaction_focus_priority()),
         "interaction_instant" => Some(interaction_instant()),
         "interaction_hold_complete" => Some(interaction_hold_complete()),
         "interaction_hold_cancel" => Some(interaction_hold_cancel()),
@@ -56,6 +58,51 @@ fn intent(kind: InteractionIntentKind) -> Action {
     Action::Custom(Box::new(move |world| send_intent(world, kind.clone())))
 }
 
+fn configure_focus_priority() -> Action {
+    Action::Custom(Box::new(|world| {
+        let mut players = world.query_filtered::<&mut Interactor, With<saddle_interaction_example_common::DemoPlayer>>();
+        let Ok(mut interactor) = players.single_mut(world) else {
+            return;
+        };
+
+        interactor.max_distance = Some(12.0);
+        interactor.proximity_radius = Some(12.0);
+        interactor.alignment_weight = 0.2;
+        interactor.distance_weight = 0.15;
+        interactor.target_priority_weight = 2.5;
+        interactor.slot_priority_weight = 0.4;
+        interactor.picking_bias = 0.0;
+        interactor.require_line_of_sight = true;
+
+        info!("[e2e:interaction_focus_priority] configured priority-first focus weights");
+    }))
+}
+
+fn set_target_priority(target_name: &'static str, priority: f32) -> Action {
+    Action::Custom(Box::new(move |world| {
+        let mut targets = world.query::<(&Name, &mut Interactable)>();
+        for (name, mut interactable) in targets.iter_mut(world) {
+            if name.as_str() == target_name {
+                interactable.priority = priority;
+                info!("[e2e:{target_name}] priority set to {priority:.1}");
+            }
+        }
+    }))
+}
+
+fn log_focus_state(label: &'static str) -> Action {
+    Action::Custom(Box::new(move |world| {
+        let diagnostics = world.resource::<LabDiagnostics>();
+        info!(
+            "[e2e:{label}] focus={:?} prompt={:?} active={:?} progress={:.2}",
+            diagnostics.focused_target_name,
+            diagnostics.prompt_label,
+            diagnostics.active_slot,
+            diagnostics.active_progress,
+        );
+    }))
+}
+
 fn reset() -> Vec<Action> {
     vec![accessibility(false), power(false)]
 }
@@ -76,6 +123,61 @@ fn smoke_launch() -> Scenario {
         .then(Action::Screenshot("smoke".into()))
         .then(Action::Log("smoke_launch: instant station focused".into()))
         .then(assertions::log_summary("smoke_launch"))
+        .build()
+}
+
+fn interaction_focus_priority() -> Scenario {
+    Scenario::builder("interaction_focus_priority")
+        .description("Bias focus toward a farther high-priority target, verify it beats the nearby chest, then relax the weighting and confirm the chest regains focus.")
+        .then_many(reset())
+        .then(station(LabStation::Instant))
+        .then(configure_focus_priority())
+        .then(set_target_priority("Terminal", 8.0))
+        .then(Action::WaitFrames(12))
+        .then(log_focus_state("priority_terminal_initial"))
+        .then(assertions::custom("terminal wins focus under priority weighting", |world| {
+            let d = world.resource::<LabDiagnostics>();
+            d.focused_target_name.as_deref() == Some("Terminal")
+                && d.prompt_label.as_deref() == Some("Hack")
+        }))
+        .then(Action::Screenshot("focus_priority_terminal".into()))
+        .then(Action::MouseMotion { delta: Vec2::new(-180.0, 0.0) })
+        .then(Action::WaitFrames(6))
+        .then(assertions::custom("terminal stays focused while the aim shifts", |world| {
+            let d = world.resource::<LabDiagnostics>();
+            d.focused_target_name.as_deref() == Some("Terminal")
+                && d.prompt_label.as_deref() == Some("Hack")
+        }))
+        .then(Action::Custom(Box::new(|world| {
+            let mut players = world.query_filtered::<&mut Interactor, With<saddle_interaction_example_common::DemoPlayer>>();
+            let Ok(mut interactor) = players.single_mut(world) else {
+                return;
+            };
+
+            interactor.target_priority_weight = 0.0;
+            interactor.alignment_weight = 1.0;
+            interactor.distance_weight = 1.0;
+            info!("[e2e:interaction_focus_priority] relaxed target priority weighting");
+        })))
+        .then(Action::MouseMotion { delta: Vec2::new(240.0, 0.0) })
+        .then(Action::WaitUntil {
+            label: "chest reclaims focus".into(),
+            condition: Box::new(|world| {
+                let d = world.resource::<LabDiagnostics>();
+                d.focused_target_name.as_deref() == Some("Chest")
+                    && d.prompt_label.as_deref() == Some("Open")
+            }),
+            max_frames: 45,
+        })
+        .then(log_focus_state("priority_chest_final"))
+        .then(assertions::custom("chest regains focus once priority weighting is relaxed", |world| {
+            let d = world.resource::<LabDiagnostics>();
+            d.focused_target_name.as_deref() == Some("Chest")
+                && d.prompt_label.as_deref() == Some("Open")
+        }))
+        .then(Action::Screenshot("focus_priority_chest".into()))
+        .then(Action::Log("interaction_focus_priority: terminal won first, then chest reclaimed focus".into()))
+        .then(assertions::log_summary("interaction_focus_priority"))
         .build()
 }
 

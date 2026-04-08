@@ -46,15 +46,27 @@ Useful runtime inspection targets:
 ## E2E
 
 ```bash
-cargo run -p saddle-interaction-lab --features e2e -- interaction_smoke
+cargo run -p saddle-interaction-lab --features e2e -- smoke_launch
+cargo run -p saddle-interaction-lab --features e2e -- interaction_focus_priority
+cargo run -p saddle-interaction-lab --features e2e -- interaction_instant
+cargo run -p saddle-interaction-lab --features e2e -- interaction_hold_complete
+cargo run -p saddle-interaction-lab --features e2e -- interaction_hold_cancel
+cargo run -p saddle-interaction-lab --features e2e -- interaction_multi_slot
+cargo run -p saddle-interaction-lab --features e2e -- interaction_sequence
+cargo run -p saddle-interaction-lab --features e2e -- interaction_gated
+cargo run -p saddle-interaction-lab --features e2e -- interaction_vehicle
+cargo run -p saddle-interaction-lab --features e2e -- interaction_accessibility
 ```
 
 Available scenarios:
 
 - `smoke_launch`
-- `interaction_smoke`
 - `interaction_focus_priority`
+- `interaction_instant`
 - `interaction_hold_complete`
 - `interaction_hold_cancel`
-- `interaction_multi_action_prompt`
-- `interaction_accessibility_toggle_mode`
+- `interaction_multi_slot`
+- `interaction_sequence`
+- `interaction_gated`
+- `interaction_vehicle`
+- `interaction_accessibility`
